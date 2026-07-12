@@ -26,17 +26,3 @@ def trapezoid_speed_reference(profile: str | None, time_s: float) -> tuple[float
             peak_speed - acceleration * ramp_down_time,
         )
     return peak_speed * (ramp_s + cruise_s), 0.0
-
-
-def rear_ramp_speed_reference(time_s: float) -> float:
-    """Immediate reverse profile used by isolated single-wheel ramp tests."""
-    peak_speed = -0.50
-    ramp_s = 0.8
-    time_s = max(0.0, time_s)
-    if time_s < ramp_s:
-        return peak_speed * time_s / ramp_s
-    if time_s < 4.8:
-        return peak_speed
-    if time_s < 5.6:
-        return peak_speed * (1.0 - (time_s - 4.8) / ramp_s)
-    return 0.0

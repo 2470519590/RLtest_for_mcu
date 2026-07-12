@@ -48,5 +48,5 @@
 - `src/robot_smoke/model/`：模型语义、actuator、五连杆、运动学和接触采样。
 - `src/robot_smoke/control/`：IK、VMC、LQR 和 LQR 设计。
 - `src/robot_smoke/experiments/`：本地 smoke、equilibrium search、诊断和 trace。
-- `src/robot_smoke/io/`：CLI、CSV 和绘图输出。
+- `src/robot_smoke/io/`：CLI 和转向 PD 图输出。
 - `src/robot_smoke/runner.py`：入口编排。

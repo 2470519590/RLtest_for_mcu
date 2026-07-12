@@ -297,81 +297,6 @@ class LqrDesignResult:
 
 
 @dataclass(frozen=True)
-class ControlTracePrevious:
-    wheel_torque: float = 0.0
-    pitch_torque: float = 0.0
-    left_length_force: float = 0.0
-    right_length_force: float = 0.0
-    left_theta_force: float = 0.0
-    right_theta_force: float = 0.0
-    left_front_tau_raw: float = 0.0
-    left_rear_tau_raw: float = 0.0
-    right_front_tau_raw: float = 0.0
-    right_rear_tau_raw: float = 0.0
-    ctrl: tuple[float, ...] = ()
-
-
-@dataclass
-class ControlTraceStats:
-    traced_steps: int = 0
-    event_steps: int = 0
-    clip_steps: int = 0
-    lqr_steps: int = 0
-    vmc_steps: int = 0
-    viewer_possible_steps: int = 0
-    small_change_steps: int = 0
-    max_ctrl_delta: float = 0.0
-    max_ctrl_delta_step: int = -1
-    max_abs_dT: float = 0.0
-    max_abs_dTp: float = 0.0
-    max_abs_dF_l: float = 0.0
-    max_abs_dF_theta: float = 0.0
-    sum_ctrl_delta: float = 0.0
-
-
-@dataclass(frozen=True)
-class ControlTraceSample:
-    step: int
-    time_s: float
-    source_lqr: int
-    source_vmc: int
-    source_clip: int
-    source_viewer_possible: int
-    vmc_jump_channel: str
-    max_ctrl_delta: float
-    dT: float
-    dTp: float
-    dF_l_left: float
-    dF_l_right: float
-    dF_theta_left: float
-    dF_theta_right: float
-    max_raw_tau_delta: float
-    T: float
-    Tp: float
-    F_l_left: float
-    F_l_right: float
-    F_theta_left: float
-    F_theta_right: float
-    left_front_tau_raw: float
-    left_rear_tau_raw: float
-    right_front_tau_raw: float
-    right_rear_tau_raw: float
-    left_front_tau: float
-    left_rear_tau: float
-    right_front_tau: float
-    right_rear_tau: float
-    left_theta_force_scale: float
-    right_theta_force_scale: float
-    max_abs_ctrl: float
-    left_front_ctrl: float
-    left_rear_ctrl: float
-    left_wheel_ctrl: float
-    right_front_ctrl: float
-    right_rear_ctrl: float
-    right_wheel_ctrl: float
-
-
-@dataclass(frozen=True)
 class VirtualRodResult:
     steps: int
     lock_base: bool
@@ -402,7 +327,6 @@ class VirtualRodResult:
     final_right_wheel_speed: float
     final_base_height: float
     final_operating_point: StaticOperatingPointSample | None
-    control_trace: tuple[ControlTraceSample, ...]
 
 
 @dataclass(frozen=True)

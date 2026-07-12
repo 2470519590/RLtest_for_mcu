@@ -6,12 +6,28 @@ import numpy as np
 
 from ..core.constants import YAW_TURN_KD, YAW_TURN_KP
 
+TURN_RATE_MAGNITUDES = {
+    "low": np.pi * 0.5,
+    "medium": np.pi,
+    "high": np.pi * 2.0,
+}
 
-def turn_rate_reference(turn_direction: str | None, turn_test: bool, time_s: float) -> float:
-    """Return the desired yaw rate for manual or continuous staged turning."""
+
+def turn_rate_magnitude(speed: str) -> float:
+    """Return the positive yaw-rate magnitude for a named turn speed."""
+    return float(TURN_RATE_MAGNITUDES[speed])
+
+
+def turn_rate_reference(
+    turn_direction: str | None,
+    turn_speed: str,
+    turn_test: bool,
+    time_s: float,
+) -> float:
+    """Return a signed manual or trapezoidal yaw-rate reference."""
+    magnitude = turn_rate_magnitude(turn_speed)
     if turn_test:
         # Single trapezoid: start at 1 s, ramp for 150 ms, stop at 5 s.
-        large_w = np.pi * 2
         time_s = max(time_s, 0.0)
         ramp_time = 0.15
         start_time = 1.0
@@ -19,15 +35,15 @@ def turn_rate_reference(turn_direction: str | None, turn_test: bool, time_s: flo
         if time_s <= start_time:
             return 0.0
         if time_s < start_time + ramp_time:
-            return large_w * (time_s - start_time) / ramp_time
+            return magnitude * (time_s - start_time) / ramp_time
         if time_s <= stop_time:
-            return large_w
+            return magnitude
         if time_s < stop_time + ramp_time:
-            return large_w * (1.0 - (time_s - stop_time) / ramp_time)
+            return magnitude * (1.0 - (time_s - stop_time) / ramp_time)
         return 0.0
     if turn_direction is None:
         return 0.0
-    return 0.35 if turn_direction == "left" else -0.35
+    return magnitude if turn_direction == "left" else -magnitude
 
 
 def yaw_turn_torque(

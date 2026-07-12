@@ -51,9 +51,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="diagnostic mode: disable all leg actuator control and Tp; keep wheel T only",
     )
-    parser.add_argument("--history-csv", type=Path)
-    parser.add_argument("--history-plot", type=Path)
-    parser.add_argument("--motor-torque-plot", type=Path)
     parser.add_argument("--diagnostics-only", action="store_true")
     parser.add_argument("--no-realtime", action="store_true")
     parser.add_argument(
@@ -64,13 +61,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--speed-profile", choices=("low", "medium", "high"))
     parser.add_argument("--turn", dest="turn_direction", choices=("left", "right"))
+    parser.add_argument("--turn-speed", choices=("low", "medium", "high"), default="high")
     parser.add_argument("--turn-test", action="store_true")
+    parser.add_argument("--turn-drive-test", choices=("low", "high"))
     parser.add_argument("--turn-pd-plot", action="store_true")
     parser.add_argument("--yaw-turn-kp", type=float)
     parser.add_argument("--yaw-turn-kd", type=float)
     parser.add_argument("--leg-sync-kp", type=float)
     parser.add_argument("--leg-sync-kd", type=float)
-    parser.add_argument("--ramp-test", choices=("left", "right"))
 
     parser.set_defaults(
         zero_steps=200,
@@ -137,13 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
         lqr_output_lowpass_hz=0.0,
         wheel_ctrl_deadzone=0.0,
         history_sample_interval=5,
-        trace_control_output=False,
-        trace_control_start_step=0,
-        trace_control_max_steps=200,
-        trace_control_mode="events",
-        trace_control_event_delta=0.01,
-        trace_control_csv=None,
-        trace_control_plot=None,
+        turn_pd_plot_path=None,
         fl_channel_test=False,
         fl_channel_forces=(-100.0, -50.0, 0.0, 50.0, 100.0, 150.0),
         fl_channel_steps=1500,
@@ -184,11 +176,11 @@ def build_parser() -> argparse.ArgumentParser:
         speed_profile=None,
         turn_direction=None,
         turn_test=False,
+        turn_drive_test=None,
         turn_pd_plot=False,
         yaw_turn_kp=None,
         yaw_turn_kd=None,
         leg_sync_kp=None,
         leg_sync_kd=None,
-        ramp_test=None,
     )
     return parser

@@ -28,10 +28,7 @@ from ..model.kinematics import (
 from ..control.ik import _virtual_rod_ik_ctrl
 from ..model.mechanics import _collect_static_operating_point_sample
 from ..model.mechanics import apply_base_impact as _apply_base_impact
-from ..control.trajectory import rear_ramp_speed_reference as _rear_ramp_speed_reference
 from ..control.trajectory import trapezoid_speed_reference as _trapezoid_speed_reference
-from ..control.roll import base_roll_angle as _base_roll_angle
-from ..control.roll import roll_support_force_offset as _roll_support_force_offset
 from ..control.turning import split_wheel_torque as _split_wheel_torque
 from ..control.turning import turn_rate_reference as _turn_rate_reference
 from ..control.turning import yaw_turn_torque as _yaw_turn_torque
@@ -40,18 +37,9 @@ from ..core.mujoco_utils import copy_data as _copy_data
 from ..core.mujoco_utils import id_by_name as _id_by_name
 from ..core.mujoco_utils import lock_base_to_initial as _lock_base_to_initial
 from ..core.mujoco_utils import name as _name
-from ..io.output import (
-    plot_control_trace as _plot_control_trace,
-    resolve_output_path as _resolve_output_path,
-    write_control_trace_csv as _write_control_trace_csv,
-)
-from ..experiments.trace import _print_control_trace_summary, _trace_control_output
 from ..core.types import (
     ActuatorCtrlStats,
     ConstraintCheckResult,
-    ControlTracePrevious,
-    ControlTraceSample,
-    ControlTraceStats,
     LqrHistorySample,
     LqrState,
     SimulatedOdometry,
@@ -65,9 +53,6 @@ from ..core.constants import (
     LEG_SYNC_DERIVATIVE_LOWPASS_HZ,
     LEG_SYNC_ERROR_LOWPASS_HZ,
     LEG_SYNC_INPUT_LOWPASS_HZ,
-    ROLL_SUPPORT_FORCE_LIMIT,
-    ROLL_SUPPORT_DEADBAND,
-    ROLL_SUPPORT_KP,
     YAW_TURN_INPUT_LOWPASS_HZ,
     YAW_TURN_ERROR_LOWPASS_HZ,
     YAW_TURN_DERIVATIVE_LOWPASS_HZ,
@@ -113,19 +98,12 @@ def _run_virtual_rod_test(
     lqr_output_lowpass_hz: float,
     wheel_ctrl_deadzone: float,
     history_sample_interval: int,
-    trace_control_output: bool,
-    trace_control_start_step: int,
-    trace_control_max_steps: int,
-    trace_control_mode: str,
-    trace_control_event_delta: float,
-    trace_control_csv: Path | None,
-    trace_control_plot: Path | None,
     initial_data: object | None = None,
     impact_level: str | None = None,
     speed_profile: str | None = None,
     turn_direction: str | None = None,
+    turn_speed: str = "high",
     turn_test: bool = False,
-    ramp_test: str | None = None,
     leg_sync_kp: float = LEG_THETA_SYNC_KP,
     leg_sync_kd: float = LEG_THETA_SYNC_KD,
     yaw_turn_kp: float = 1.8,
@@ -195,9 +173,6 @@ def _run_virtual_rod_test(
     vmc_memory: dict[str, VmcSideMemory] = {}
     vmc_diagnostics: dict[str, VmcDiagnostics] = {}
     odometry = SimulatedOdometry()
-    trace_previous: ControlTracePrevious | None = None
-    trace_stats = ControlTraceStats()
-    trace_samples: list[ControlTraceSample] = []
     for step in range(steps):
         _apply_base_impact(mujoco, model, data, impact_level, step)
         _update_simulated_odometry(mujoco, model, data, odometry)
@@ -208,8 +183,6 @@ def _run_virtual_rod_test(
         if lqr_test and step % lqr_control_period_steps == 0:
             time_s = step * float(model.opt.timestep)
             _, x_reference_rate = _trapezoid_speed_reference(speed_profile, time_s)
-            if ramp_test is not None:
-                x_reference_rate = _rear_ramp_speed_reference(time_s)
             wheel_torque, pitch_torque, length_force_delta, final_lqr_state, x_velocity_reference = _lqr_middle_control(
                 mujoco,
                 model,
@@ -227,7 +200,7 @@ def _run_virtual_rod_test(
                 lqr_x_outer_kp,
                 lqr_x_outer_max_v,
                 x_reference_rate,
-                speed_profile is not None or ramp_test is not None,
+                speed_profile is not None,
                 odometry,
             )
             control_dt = float(model.opt.timestep) * lqr_control_period_steps
@@ -261,7 +234,7 @@ def _run_virtual_rod_test(
                 )
             previous_wheel_torque = wheel_torque
             previous_pitch_torque = pitch_torque
-            yaw_rate_reference = _turn_rate_reference(turn_direction, turn_test, time_s)
+            yaw_rate_reference = _turn_rate_reference(turn_direction, turn_speed, turn_test, time_s)
             raw_yaw_rate = float(data.qvel[5])
             filtered_yaw_rate = _lowpass_value(
                 raw_yaw_rate,
@@ -313,16 +286,7 @@ def _run_virtual_rod_test(
         step_right_target = _apply_theta_pitch_feedforward(right_target, pitch_for_theta_ff, theta_pitch_ff)
         effective_theta_kp = 0.0 if lqr_test else theta_kp
         effective_theta_kd = 0.0 if lqr_test else theta_kd
-        roll_force_offset = _roll_support_force_offset(
-            _base_roll_angle(mujoco, model, data),
-            ROLL_SUPPORT_KP,
-            ROLL_SUPPORT_FORCE_LIMIT,
-            ROLL_SUPPORT_DEADBAND,
-        )
-        side_length_force_ff = (
-            length_force_ff + length_force_delta + roll_force_offset,
-            length_force_ff + length_force_delta - roll_force_offset,
-        )
+        side_length_force_ff = (length_force_ff + length_force_delta,) * 2
         left_leg = _compute_virtual_leg_state(mujoco, model, data, "left")
         right_leg = _compute_virtual_leg_state(mujoco, model, data, "right")
         raw_sync_error = right_leg.theta - left_leg.theta
@@ -396,25 +360,6 @@ def _run_virtual_rod_test(
                 or saturated
             )
             ctrl_abs = max(ctrl_abs, float(np.max(np.abs(data.ctrl))))
-        if (
-            trace_control_output
-            and step >= trace_control_start_step
-            and (trace_control_max_steps <= 0 or trace_stats.traced_steps < trace_control_max_steps)
-        ):
-            trace_previous, trace_sample = _trace_control_output(
-                mujoco,
-                model,
-                data,
-                step,
-                wheel_torque,
-                pitch_torque,
-                vmc_diagnostics,
-                trace_previous,
-                trace_stats,
-                trace_control_mode,
-                trace_control_event_delta,
-            )
-            trace_samples.append(trace_sample)
         max_abs_ctrl = max(max_abs_ctrl, ctrl_abs)
         max_length_error = max(max_length_error, length_error)
         max_theta_error = max(max_theta_error, theta_error)
@@ -475,17 +420,6 @@ def _run_virtual_rod_test(
                 )
             )
 
-    if trace_control_output:
-        _print_control_trace_summary(trace_stats)
-        if trace_control_csv is not None:
-            csv_path = _resolve_output_path(trace_control_csv)
-            _write_control_trace_csv(csv_path, tuple(trace_samples))
-            print(f"  trace_control_csv: {csv_path}")
-        if trace_control_plot is not None:
-            plot_path = _resolve_output_path(trace_control_plot)
-            _plot_control_trace(plot_path, tuple(trace_samples))
-            print(f"  trace_control_plot: {plot_path}")
-
     if lock_base:
         _lock_base_to_initial(mujoco, model, data)
     left_state = _compute_virtual_leg_state(mujoco, model, data, "left")
@@ -544,7 +478,6 @@ def _run_virtual_rod_test(
         final_right_wheel_speed=final_right_wheel_speed,
         final_base_height=float(data.qpos[2]) if model.nq >= 3 else math.nan,
         final_operating_point=final_operating_point,
-        control_trace=tuple(trace_samples),
     )
 
 

@@ -37,6 +37,57 @@ Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
 & 'E:\miniconda\envs\py310\python.exe' run_smoke.py --visualize
 ```
 
+## 当前测试接口
+
+所有物理行为以 MuJoCo viewer 人工观察为准。以下命令均使用固定 `L0=0.35 m` 的 true-equilibrium 入口。
+
+启动平衡测试：
+
+```powershell
+Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --lqr-true-equilibrium --visualize --visualize-seconds 10
+```
+
+直线速度测试：
+
+```powershell
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --lqr-true-equilibrium --speed-profile low --visualize --visualize-seconds 10
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --lqr-true-equilibrium --speed-profile medium --visualize --visualize-seconds 10
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --lqr-true-equilibrium --speed-profile high --visualize --visualize-seconds 10
+```
+
+原地旋转测试：
+
+```powershell
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --turn-test --turn-speed low --visualize --visualize-seconds 6
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --turn-test --turn-speed medium --visualize --visualize-seconds 6
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --turn-test --turn-speed high --visualize --visualize-seconds 6
+```
+
+转向档位为 `low=pi/2`、`medium=pi`、`high=2*pi rad/s`。`--turn left|right --turn-speed <档位>` 保留为连续手动转向接口。
+
+旋转前进测试：
+
+```powershell
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --turn-drive-test low --visualize --visualize-seconds 10
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --turn-drive-test high --visualize --visualize-seconds 10
+```
+
+`--turn-drive-test low` 固定为低速前进加 low 旋转；`--turn-drive-test high` 固定为高速前进加 medium 旋转。`--turn-speed` 只用于单独转向测试。
+
+平衡冲击测试：
+
+```powershell
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --lqr-true-equilibrium --impact small --visualize --visualize-seconds 10
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --lqr-true-equilibrium --impact medium --visualize --visualize-seconds 10
+```
+
+`--turn-pd-plot` 保留为按需诊断接口；正常转向和其他测试默认不启动绘图。仅在检查 yaw PD 与双腿同步 PD 的输入、P/D 分量时追加：
+
+```powershell
+--turn-pd-plot
+```
+
 如果只是实验脚本，不需要引入完整工程化流程。
 
 ## 以后服务器训练怎么接
