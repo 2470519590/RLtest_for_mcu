@@ -62,6 +62,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("small", "medium"),
         help="apply one fixed horizontal base impact",
     )
+    parser.add_argument("--speed-profile", choices=("low", "medium", "high"))
+    parser.add_argument("--turn", dest="turn_direction", choices=("left", "right"))
+    parser.add_argument("--turn-test", action="store_true")
+    parser.add_argument("--turn-pd-plot", action="store_true")
+    parser.add_argument("--yaw-turn-kp", type=float)
+    parser.add_argument("--yaw-turn-kd", type=float)
+    parser.add_argument("--leg-sync-kp", type=float)
+    parser.add_argument("--leg-sync-kd", type=float)
+    parser.add_argument("--ramp-test", choices=("left", "right"))
 
     parser.set_defaults(
         zero_steps=200,
@@ -172,5 +181,14 @@ def build_parser() -> argparse.ArgumentParser:
         print_static_operating_point=False,
         impact_level=None,
         use_locked_equilibrium=False,
+        speed_profile=None,
+        turn_direction=None,
+        turn_test=False,
+        turn_pd_plot=False,
+        yaw_turn_kp=None,
+        yaw_turn_kd=None,
+        leg_sync_kp=None,
+        leg_sync_kd=None,
+        ramp_test=None,
     )
     return parser

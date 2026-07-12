@@ -233,7 +233,7 @@ def _virtual_rod_ik_ctrl(
     joint_kd: float,
     ik_target_cache: dict[tuple[str, float, float, str, float, int], tuple[float, float]] | None = None,
     theta_force_offset: float | tuple[float, float] = 0.0,
-    length_force_ff: float = 0.0,
+    length_force_ff: float | tuple[float, float] = 0.0,
     length_ki: float = 0.0,
     length_integral_limit: float = 0.3,
     length_force_rate_limit: float = 0.0,
@@ -251,6 +251,10 @@ def _virtual_rod_ik_ctrl(
         side_theta_offsets = dict(zip(("left", "right"), theta_force_offset))
     else:
         side_theta_offsets = {"left": theta_force_offset, "right": theta_force_offset}
+    if isinstance(length_force_ff, tuple):
+        side_length_force_ff = dict(zip(("left", "right"), length_force_ff))
+    else:
+        side_length_force_ff = {"left": length_force_ff, "right": length_force_ff}
     for side, target in (("left", left_target), ("right", right_target)):
         reset_state = _compute_virtual_leg_state(mujoco, model, reset_data, side)
         cache_key = (
@@ -309,7 +313,7 @@ def _virtual_rod_ik_ctrl(
                 max(joint_kd, kd),
                 (front_target, rear_target),
                 side_theta_offsets[side],
-                length_force_ff=length_force_ff,
+                length_force_ff=side_length_force_ff[side],
                 length_ki=length_ki,
                 length_integral_limit=length_integral_limit,
                 length_force_rate_limit=length_force_rate_limit,

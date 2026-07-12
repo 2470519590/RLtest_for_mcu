@@ -72,6 +72,15 @@ class LqrState:
     length_rate: float
 
 
+@dataclass
+class SimulatedOdometry:
+    """Forward odometry synthesized from world-frame wheel-center motion."""
+
+    position: float = 0.0
+    speed: float = 0.0
+    previous_time: float | None = None
+
+
 @dataclass(frozen=True)
 class LqrControlDebug:
     state: LqrState
@@ -93,6 +102,22 @@ class LqrHistorySample:
     pitch_torque: float
     left_pitch_torque: float
     right_pitch_torque: float
+    yaw_rate_reference: float
+    yaw_rate: float
+    yaw_rate_filtered: float
+    yaw_error: float
+    yaw_error_rate_raw: float
+    yaw_error_rate: float
+    yaw_p_torque: float
+    yaw_d_torque: float
+    turn_torque: float
+    sync_error_raw: float
+    sync_error: float
+    sync_error_rate_raw: float
+    sync_error_rate: float
+    sync_p_torque: float
+    sync_d_torque: float
+    sync_torque: float
     base_height: float
     max_abs_ctrl: float
     left_length: float
@@ -115,6 +140,8 @@ class LqrHistorySample:
     right_rear_tau: float
     left_theta: float
     right_theta: float
+    left_theta_rate: float
+    right_theta_rate: float
     left_branch_violation: float
     right_branch_violation: float
     left_front_ctrl: float

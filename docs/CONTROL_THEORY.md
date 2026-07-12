@@ -48,8 +48,9 @@ X = [theta, dtheta, x, dx, phi, dphi]^T
 ```text
 theta  = 0.5 * (theta_world_left + theta_world_right)
 dtheta = 0.5 * (dtheta_world_left + dtheta_world_right)
-x      = r_wheel * 0.5 * (q_left_wheel + q_right_wheel) - x_ref
-dx     = r_wheel * 0.5 * (dq_left_wheel + dq_right_wheel) - dx_ref
+v_odom = h^T * 0.5 * (v_left_wheel_world + v_right_wheel_world)
+x      = integral(v_odom) dt - x_ref
+dx     = v_odom - dx_ref
 phi    = body pitch
 dphi   = body pitch rate
 ```
@@ -80,23 +81,37 @@ lqr_pitch_sign = -1
 
 腿长 `L/dL` 不进入当前有效 LQR 状态；腿长只由 VMC 支撑环控制。曾经尝试的 `X_aug=[theta,dtheta,x,dx,phi,dphi,L,dL]` 和 `U_aug=[T,Tp,delta_F_l]` 不再作为有效平衡控制器。
 
+### 梯形速度参考
+
+前进测试不把绝对 `x/dx` 拉回零，而是生成移动参考：
+
+```text
+X_track = [theta, dtheta, x0, dx - v_ref(t), phi, dphi]^T
+U = U0 - K * (X_track - X0)
+```
+
+`v_ref(t)` 为闭式梯形速度轨迹，包含加速、匀速和减速段。当前固定档位：低速峰值 `1 m/s`，中速峰值 `2 m/s`，高速峰值 `3 m/s`；均采用 `1.5 s` 加速、`4 s` 匀速、`1.5 s` 减速。速度跟踪期间 `x` 只记录，不参与反馈或停车后的回拉。
+
 ## 虚拟腿几何
 
 每条腿用髋部参考点到轮侧公共铰点的虚拟杆表示：
 
 ```text
 p_hip   = 0.5 * (p_front_upper + p_rear_upper)
+h       = normalize(project_xy(R_base * [1, 0, 0]^T))
 p_wheel = p_carrier_site
 r       = p_wheel - p_hip
-L       = sqrt(r_x^2 + r_z^2)
-theta_world = atan2(r_x, -r_z)
+r_f     = h^T r
+L       = sqrt(r_f^2 + r_z^2)
+theta_world = atan2(r_f, -r_z)
 ```
 
 速度：
 
 ```text
-dL           = (r_x v_x + r_z v_z) / L
-dtheta_world = (-r_z v_x + r_x v_z) / L^2
+dr_f         = h^T v + (dh/dt)^T r
+dL           = (r_f dr_f + r_z v_z) / L
+dtheta_world = (-r_z dr_f + r_f v_z) / L^2
 ```
 
 符号：
@@ -188,14 +203,64 @@ phi 和 theta 为小角度
 当前 LQR 使用左右平均状态，不显式控制左右腿差模。三维双轮模型在 VMC 分配前使用弱同步阻尼：
 
 ```text
-e_diff  = theta_left - theta_right
-de_diff = dtheta_left - dtheta_right
-Tp_sync = -k_sync * e_diff - d_sync * de_diff
+e_sync  = theta_right - theta_left
+de_sync = dtheta_right - dtheta_left
+Tp_sync = k_sync * e_sync + d_sync * de_sync
 Tp_left  = Tp + Tp_sync
 Tp_right = Tp - Tp_sync
 ```
 
+若 `e_sync>0`，左腿得到更大的 `Tp`、右腿得到更小的 `Tp`。已确认单腿 `+Tp` 初始增大 `theta_world`，因此该分配减小 `theta_right-theta_left`，构成差模负反馈。
+
+当前默认同步参数为 `k_sync=20 N*m/rad`、`d_sync=0.8 N*m*s/rad`。`--leg-sync-kp <value>` 仅覆盖 `k_sync`，供正常转向 smoke 做比例增益辨识；`d_sync` 保持固定，以避免接触速度噪声直接放大到 `Tp_sync`。
+
+航向速率环默认 `k_yaw=1.8 N*m/(rad/s)`、`d_yaw=0.04 N*m/(rad/s^2)`。`--yaw-turn-kp <value>` 仅覆盖 `k_yaw`；它和 `--leg-sync-kp` 分别对应轮端差速与双腿协调两个比例环，必须独立调节。
+
+## 自动横滚补偿
+
+横滚补偿常态运行，测试模式只改变速度或航向参考。令 `gamma` 为机身绕前向 X 轴的横滚角、`gamma_ref=0`，则按文章 2.2.1 生成左右腿差支撑力：
+
+```text
+F_roll  = K_gamma * (gamma_ref - gamma)
+F_left  = F_length + F_roll
+F_right = F_length - F_roll
+```
+
+为避免微小横滚噪声持续驱动左右差支撑力，使用死区 `gamma_db=0.02 rad`：当 `abs(gamma) <= gamma_db` 时令 `F_roll=0`。
+
+`F_left/F_right` 分别经各腿的解析 Jacobian 转为关节力矩。它不替代转向的 `Tp_sync`：前者保持横滚，后者抑制左右腿前后角差。
+
 该项只抑制左右反相腿角，不改变整体 LQR 的共模 `Tp`。
+
+## 转向与双腿协调
+
+按参考文章，航向角速度误差经 PD 得到差动力矩：
+
+```text
+e_psi = psi_dot_ref - psi_dot
+tau_psi = Kp_psi * e_psi + Kd_psi * de_psi
+T_left  = T / 2 - tau_psi
+T_right = T / 2 + tau_psi
+```
+
+原地转向测试仅使用上述差动力矩；公共平衡力矩 `T` 仍由冻结平衡控制器给出，不叠加直线速度或位置参考。航向参考按五段常值角速度给定：
+
+```text
+psi_dot_ref = [0.15, 0.35, 0.60, 0.35, 0.15] rad/s
+```
+
+相邻档位之间使用 `0.5 s` 线性升降沿，避免将参考阶跃的微分项变成瞬时差轮力矩。单侧斜坡后退测试不属于转向测试；它保留公共平衡控制并仅给出轮速参考 `v_ref`，腿长支撑仍保持 `L0=0.35 m`。
+
+左右腿协调直接使用同一世界系虚拟腿角的差模。劈叉对应两腿竖直角不一致，因此误差必须为右腿减左腿：
+
+```text
+e_sync   = theta_right - theta_left
+Tp_sync  = Kp_sync * e_sync + Kd_sync * d(e_sync)
+Tp_left  = Tp + Tp_sync
+Tp_right = Tp - Tp_sync
+```
+
+该协调项用于抑制差动力矩引起的左右腿反相摆动，不替代共模平衡 `Tp`。
 
 ## 正常腿型分支
 

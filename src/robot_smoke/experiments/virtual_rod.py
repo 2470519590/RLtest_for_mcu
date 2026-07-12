@@ -7,6 +7,7 @@ import math
 import numpy as np
 
 from ..model.actuators import apply_additive_wheel_torque_ctrl as _apply_additive_wheel_torque_ctrl
+from ..model.actuators import apply_wheel_torque_pair_ctrl as _apply_wheel_torque_pair_ctrl
 from ..model.fivebar import compute_leg_branch_metrics as _compute_leg_branch_metrics
 from ..control.lqr import (
     apply_theta_pitch_feedforward as _apply_theta_pitch_feedforward,
@@ -21,11 +22,19 @@ from ..control.lqr_design import (
 from ..model.kinematics import (
     compute_virtual_leg_state as _compute_virtual_leg_state,
     lower_loop_error as _lower_loop_error,
+    update_simulated_odometry as _update_simulated_odometry,
     wheel_speeds as _wheel_speeds,
 )
 from ..control.ik import _virtual_rod_ik_ctrl
 from ..model.mechanics import _collect_static_operating_point_sample
 from ..model.mechanics import apply_base_impact as _apply_base_impact
+from ..control.trajectory import rear_ramp_speed_reference as _rear_ramp_speed_reference
+from ..control.trajectory import trapezoid_speed_reference as _trapezoid_speed_reference
+from ..control.roll import base_roll_angle as _base_roll_angle
+from ..control.roll import roll_support_force_offset as _roll_support_force_offset
+from ..control.turning import split_wheel_torque as _split_wheel_torque
+from ..control.turning import turn_rate_reference as _turn_rate_reference
+from ..control.turning import yaw_turn_torque as _yaw_turn_torque
 from ..core.mujoco_utils import assert_finite as _assert_finite
 from ..core.mujoco_utils import copy_data as _copy_data
 from ..core.mujoco_utils import id_by_name as _id_by_name
@@ -45,6 +54,7 @@ from ..core.types import (
     ControlTraceStats,
     LqrHistorySample,
     LqrState,
+    SimulatedOdometry,
     VirtualRodResult,
     VmcDiagnostics,
     VmcSideMemory,
@@ -52,6 +62,15 @@ from ..core.types import (
 from ..core.constants import (
     LEG_THETA_SYNC_KD,
     LEG_THETA_SYNC_KP,
+    LEG_SYNC_DERIVATIVE_LOWPASS_HZ,
+    LEG_SYNC_ERROR_LOWPASS_HZ,
+    LEG_SYNC_INPUT_LOWPASS_HZ,
+    ROLL_SUPPORT_FORCE_LIMIT,
+    ROLL_SUPPORT_DEADBAND,
+    ROLL_SUPPORT_KP,
+    YAW_TURN_INPUT_LOWPASS_HZ,
+    YAW_TURN_ERROR_LOWPASS_HZ,
+    YAW_TURN_DERIVATIVE_LOWPASS_HZ,
 )
 
 def _run_virtual_rod_test(
@@ -103,6 +122,14 @@ def _run_virtual_rod_test(
     trace_control_plot: Path | None,
     initial_data: object | None = None,
     impact_level: str | None = None,
+    speed_profile: str | None = None,
+    turn_direction: str | None = None,
+    turn_test: bool = False,
+    ramp_test: str | None = None,
+    leg_sync_kp: float = LEG_THETA_SYNC_KP,
+    leg_sync_kd: float = LEG_THETA_SYNC_KD,
+    yaw_turn_kp: float = 1.8,
+    yaw_turn_kd: float = 0.0,
 ) -> VirtualRodResult:
     if initial_data is not None:
         data = _copy_data(mujoco, model, initial_data)
@@ -140,22 +167,49 @@ def _run_virtual_rod_test(
     max_abs_right_wheel_speed = 0.0
     previous_wheel_torque = 0.0
     previous_pitch_torque = 0.0
+    previous_yaw_error = 0.0
+    previous_raw_yaw_error = 0.0
+    filtered_yaw_rate = 0.0
+    filtered_yaw_error = 0.0
+    filtered_yaw_error_rate = 0.0
+    filtered_sync_error = 0.0
+    filtered_sync_error_rate = 0.0
+    filtered_left_theta = 0.0
+    filtered_right_theta = 0.0
+    raw_yaw_error_rate = 0.0
+    yaw_error_rate = 0.0
+    yaw_p_torque = 0.0
+    yaw_d_torque = 0.0
+    raw_sync_error = 0.0
+    raw_sync_error_rate = 0.0
+    sync_p_torque = 0.0
+    sync_d_torque = 0.0
+    yaw_rate_reference = 0.0
+    turn_torque = 0.0
+    left_wheel_torque = 0.0
+    right_wheel_torque = 0.0
     length_force_delta = 0.0
     x_velocity_reference = 0.0
     history: list[LqrHistorySample] = []
     ik_target_cache: dict[tuple[str, float, float, str, float, int], tuple[float, float]] = {}
     vmc_memory: dict[str, VmcSideMemory] = {}
     vmc_diagnostics: dict[str, VmcDiagnostics] = {}
+    odometry = SimulatedOdometry()
     trace_previous: ControlTracePrevious | None = None
     trace_stats = ControlTraceStats()
     trace_samples: list[ControlTraceSample] = []
     for step in range(steps):
         _apply_base_impact(mujoco, model, data, impact_level, step)
+        _update_simulated_odometry(mujoco, model, data, odometry)
         if lock_base:
             _lock_base_to_initial(mujoco, model, data)
         wheel_torque = previous_wheel_torque
         pitch_torque = previous_pitch_torque
         if lqr_test and step % lqr_control_period_steps == 0:
+            time_s = step * float(model.opt.timestep)
+            _, x_reference_rate = _trapezoid_speed_reference(speed_profile, time_s)
+            if ramp_test is not None:
+                x_reference_rate = _rear_ramp_speed_reference(time_s)
             wheel_torque, pitch_torque, length_force_delta, final_lqr_state, x_velocity_reference = _lqr_middle_control(
                 mujoco,
                 model,
@@ -172,6 +226,9 @@ def _run_virtual_rod_test(
                 lqr_tp_limit,
                 lqr_x_outer_kp,
                 lqr_x_outer_max_v,
+                x_reference_rate,
+                speed_profile is not None or ramp_test is not None,
+                odometry,
             )
             control_dt = float(model.opt.timestep) * lqr_control_period_steps
             wheel_torque = _lowpass_value(
@@ -204,6 +261,48 @@ def _run_virtual_rod_test(
                 )
             previous_wheel_torque = wheel_torque
             previous_pitch_torque = pitch_torque
+            yaw_rate_reference = _turn_rate_reference(turn_direction, turn_test, time_s)
+            raw_yaw_rate = float(data.qvel[5])
+            filtered_yaw_rate = _lowpass_value(
+                raw_yaw_rate,
+                filtered_yaw_rate,
+                YAW_TURN_INPUT_LOWPASS_HZ,
+                control_dt,
+            )
+            raw_yaw_error = yaw_rate_reference - filtered_yaw_rate
+            filtered_yaw_error = _lowpass_value(
+                raw_yaw_error,
+                filtered_yaw_error,
+                YAW_TURN_ERROR_LOWPASS_HZ,
+                control_dt,
+            )
+            if previous_yaw_error == 0.0 and step == 0:
+                previous_yaw_error = raw_yaw_error
+                previous_raw_yaw_error = raw_yaw_error
+                yaw_error_rate = 0.0
+            else:
+                raw_yaw_error_rate = (raw_yaw_error - previous_raw_yaw_error) / control_dt
+                yaw_error_rate = _lowpass_value(
+                    raw_yaw_error_rate,
+                    filtered_yaw_error_rate,
+                    YAW_TURN_DERIVATIVE_LOWPASS_HZ,
+                    control_dt,
+                )
+                filtered_yaw_error_rate = yaw_error_rate
+            previous_raw_yaw_error = raw_yaw_error
+            yaw_p_torque = yaw_turn_kp * filtered_yaw_error
+            yaw_d_torque = yaw_turn_kd * yaw_error_rate
+            turn_torque, previous_yaw_error = _yaw_turn_torque(
+                yaw_rate_reference,
+                filtered_yaw_rate,
+                previous_yaw_error,
+                control_dt,
+                kp=yaw_turn_kp,
+                kd=yaw_turn_kd,
+                error_rate=yaw_error_rate,
+                error=filtered_yaw_error,
+            )
+            left_wheel_torque, right_wheel_torque = _split_wheel_torque(wheel_torque, turn_torque)
             max_abs_lqr_wheel_torque = max(max_abs_lqr_wheel_torque, abs(wheel_torque))
             max_abs_lqr_pitch_torque = max(max_abs_lqr_pitch_torque, abs(pitch_torque))
         elif lqr_test:
@@ -214,11 +313,50 @@ def _run_virtual_rod_test(
         step_right_target = _apply_theta_pitch_feedforward(right_target, pitch_for_theta_ff, theta_pitch_ff)
         effective_theta_kp = 0.0 if lqr_test else theta_kp
         effective_theta_kd = 0.0 if lqr_test else theta_kd
+        roll_force_offset = _roll_support_force_offset(
+            _base_roll_angle(mujoco, model, data),
+            ROLL_SUPPORT_KP,
+            ROLL_SUPPORT_FORCE_LIMIT,
+            ROLL_SUPPORT_DEADBAND,
+        )
+        side_length_force_ff = (
+            length_force_ff + length_force_delta + roll_force_offset,
+            length_force_ff + length_force_delta - roll_force_offset,
+        )
         left_leg = _compute_virtual_leg_state(mujoco, model, data, "left")
         right_leg = _compute_virtual_leg_state(mujoco, model, data, "right")
-        sync_torque = -LEG_THETA_SYNC_KP * (left_leg.theta - right_leg.theta) - LEG_THETA_SYNC_KD * (
-            left_leg.theta_rate - right_leg.theta_rate
+        raw_sync_error = right_leg.theta - left_leg.theta
+        filtered_left_theta = _lowpass_value(
+            left_leg.theta,
+            filtered_left_theta,
+            LEG_SYNC_INPUT_LOWPASS_HZ,
+            float(model.opt.timestep),
         )
+        filtered_right_theta = _lowpass_value(
+            right_leg.theta,
+            filtered_right_theta,
+            LEG_SYNC_INPUT_LOWPASS_HZ,
+            float(model.opt.timestep),
+        )
+        filtered_sync_input_error = filtered_right_theta - filtered_left_theta
+        sync_error = _lowpass_value(
+            filtered_sync_input_error,
+            filtered_sync_error,
+            LEG_SYNC_ERROR_LOWPASS_HZ,
+            float(model.opt.timestep),
+        )
+        filtered_sync_error = sync_error
+        raw_sync_error_rate = right_leg.theta_rate - left_leg.theta_rate
+        sync_error_rate = _lowpass_value(
+            raw_sync_error_rate,
+            filtered_sync_error_rate,
+            LEG_SYNC_DERIVATIVE_LOWPASS_HZ,
+            float(model.opt.timestep),
+        )
+        filtered_sync_error_rate = sync_error_rate
+        sync_p_torque = leg_sync_kp * sync_error
+        sync_d_torque = leg_sync_kd * sync_error_rate
+        sync_torque = sync_p_torque + sync_d_torque
         left_pitch_torque = pitch_torque + sync_torque
         right_pitch_torque = pitch_torque - sync_torque
         ctrl_abs, saturated, length_error, theta_error = _virtual_rod_ik_ctrl(
@@ -238,7 +376,7 @@ def _run_virtual_rod_test(
             joint_kd,
             ik_target_cache,
             theta_force_offset=(left_pitch_torque, right_pitch_torque),
-            length_force_ff=length_force_ff + length_force_delta,
+            length_force_ff=side_length_force_ff,
             length_ki=length_ki,
             length_integral_limit=length_integral_limit,
             length_force_rate_limit=length_force_rate_limit,
@@ -247,11 +385,12 @@ def _run_virtual_rod_test(
         )
         if lqr_test:
             saturated = (
-                _apply_additive_wheel_torque_ctrl(
+                _apply_wheel_torque_pair_ctrl(
                     mujoco,
                     model,
                     data,
-                    wheel_torque,
+                    left_wheel_torque,
+                    right_wheel_torque,
                     wheel_ctrl_deadzone,
                 )
                 or saturated
@@ -310,12 +449,29 @@ def _run_virtual_rod_test(
                     pitch_torque,
                     left_pitch_torque,
                     right_pitch_torque,
+                    yaw_rate_reference,
+                    raw_yaw_rate,
+                    filtered_yaw_rate,
+                    previous_yaw_error,
+                    raw_yaw_error_rate,
+                    yaw_error_rate,
+                    yaw_p_torque,
+                    yaw_d_torque,
+                    turn_torque,
+                    raw_sync_error,
+                    sync_error,
+                    raw_sync_error_rate,
+                    sync_error_rate,
+                    sync_p_torque,
+                    sync_d_torque,
+                    sync_torque,
                     lqr_x_reference,
                     lqr_x_source,
                     left_target,
                     right_target,
                     vmc_diagnostics,
                     x_velocity_reference,
+                    odometry,
                 )
             )
 
@@ -455,7 +611,9 @@ def _check_lower_loop_constraints(
     length_force_delta = 0.0
     ik_target_cache: dict[tuple[str, float, float, str, float, int], tuple[float, float]] = {}
     vmc_memory: dict[str, VmcSideMemory] = {}
+    odometry = SimulatedOdometry()
     for step in range(steps):
+        _update_simulated_odometry(mujoco, model, data, odometry)
         if lock_base:
             _lock_base_to_initial(mujoco, model, data)
         if use_virtual_rod:
@@ -478,6 +636,7 @@ def _check_lower_loop_constraints(
                     lqr_tp_limit,
                     lqr_x_outer_kp,
                     lqr_x_outer_max_v,
+                    odometry=odometry,
                 )
                 control_dt = float(model.opt.timestep) * lqr_control_period_steps
                 wheel_torque = _lowpass_value(

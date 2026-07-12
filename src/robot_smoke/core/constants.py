@@ -64,8 +64,22 @@ MEASURED_LQR_B_CONTINUOUS = np.array(
 
 # The sagittal model assumes both virtual legs move in phase. The 3-D model
 # needs a small differential damper to enforce that assumption.
-LEG_THETA_SYNC_KP = 8.0
-LEG_THETA_SYNC_KD = 2.0
+LEG_THETA_SYNC_KP = 30
+LEG_THETA_SYNC_KD = 20
+LEG_SYNC_INPUT_LOWPASS_HZ = 500
+LEG_SYNC_ERROR_LOWPASS_HZ = 10
+LEG_SYNC_DERIVATIVE_LOWPASS_HZ = 10
+
+YAW_TURN_KP = 3
+YAW_TURN_KD = 0.1
+YAW_TURN_INPUT_LOWPASS_HZ = 500
+YAW_TURN_ERROR_LOWPASS_HZ = 10
+YAW_TURN_DERIVATIVE_LOWPASS_HZ = 10
+
+# Article section 2.2.1: differential leg support keeps the body level.
+ROLL_SUPPORT_KP = 80.0
+ROLL_SUPPORT_FORCE_LIMIT = 25.0
+ROLL_SUPPORT_DEADBAND = 0.02
 
 DEFAULT_LQR_K = np.array(
     [

@@ -66,6 +66,27 @@ def apply_additive_wheel_torque_ctrl(
     return saturated
 
 
+def apply_wheel_torque_pair_ctrl(
+    mujoco,
+    model,
+    data,
+    left_torque: float,
+    right_torque: float,
+    wheel_ctrl_deadzone: float = 0.0,
+) -> bool:
+    """Apply independent left/right wheel torques for yaw control."""
+    saturated = False
+    for actuator_id, torque in zip(wheel_actuator_ids(mujoco, model), (left_torque, right_torque)):
+        gear = float(model.actuator_gear[actuator_id, 0])
+        low, high = model.actuator_ctrlrange[actuator_id]
+        raw_ctrl = float(torque / gear)
+        clipped = float(np.clip(raw_ctrl, low, high))
+        if abs(raw_ctrl - clipped) > 1e-12:
+            saturated = True
+        data.ctrl[actuator_id] = 0.0 if abs(clipped) < wheel_ctrl_deadzone else clipped
+    return saturated
+
+
 def actuator_ctrl_map(mujoco, model, data) -> dict[str, float]:
     return {
         _name(mujoco, model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_id): float(data.ctrl[actuator_id])

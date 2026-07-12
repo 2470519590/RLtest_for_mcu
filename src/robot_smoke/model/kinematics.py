@@ -10,7 +10,18 @@ from ..core.mujoco_utils import body_pos_vel as _body_pos_vel
 from ..core.mujoco_utils import id_by_name as _id_by_name
 from ..core.mujoco_utils import site_pos as _site_pos
 from ..core.mujoco_utils import site_pos_vel as _site_pos_vel
-from ..core.types import VirtualLegState
+from ..core.types import SimulatedOdometry, VirtualLegState
+
+
+def base_forward_heading(mujoco, model, data) -> np.ndarray:
+    """Return the base local +X direction projected onto the world XY plane."""
+    base_id = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, "base")
+    forward = data.xmat[base_id].reshape(3, 3)[:, 0].copy()
+    forward[2] = 0.0
+    norm = float(np.linalg.norm(forward))
+    if norm <= 1e-9:
+        return np.array([1.0, 0.0, 0.0], dtype=float)
+    return forward / norm
 
 
 def lower_loop_error(mujoco, model, data, side: str) -> float:
@@ -28,9 +39,12 @@ def compute_virtual_leg_state(mujoco, model, data, side: str) -> VirtualLegState
 
     rod = wheel_pos - hip_pos
     rod_vel = wheel_vel - hip_vel
-    rx = float(rod[0])
+    heading = base_forward_heading(mujoco, model, data)
+    rx = float(np.dot(rod, heading))
     rz = float(rod[2])
-    vx = float(rod_vel[0])
+    yaw_rate = float(data.qvel[5]) if model.nv > 5 else 0.0
+    heading_rate = yaw_rate * np.array([-heading[1], heading[0], 0.0], dtype=float)
+    vx = float(np.dot(rod_vel, heading) + np.dot(rod, heading_rate))
     vz = float(rod_vel[2])
     length = max(math.hypot(rx, rz), 1e-9)
     length_rate = (rx * vx + rz * vz) / length
@@ -80,6 +94,31 @@ def wheel_center_speeds(mujoco, model, data) -> tuple[float, float]:
         mujoco.mj_jacBody(model, data, jacp, jacr, body_id)
         speeds.append(float((jacp @ data.qvel)[0]))
     return tuple(speeds)
+
+
+def wheel_center_forward_speed(mujoco, model, data) -> float:
+    """World-truth wheel-center speed expressed along the current vehicle heading."""
+    heading = base_forward_heading(mujoco, model, data)
+    velocity = np.zeros(3, dtype=float)
+    for body_name in ("left_wheel", "right_wheel"):
+        body_id = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        jacp = np.zeros((3, model.nv))
+        jacr = np.zeros((3, model.nv))
+        mujoco.mj_jacBody(model, data, jacp, jacr, body_id)
+        velocity += jacp @ data.qvel
+    return float(np.dot(0.5 * velocity, heading))
+
+
+def update_simulated_odometry(mujoco, model, data, odometry: SimulatedOdometry) -> SimulatedOdometry:
+    """Integrate a heading-frame odometer from world-frame wheel-center truth."""
+    speed = wheel_center_forward_speed(mujoco, model, data)
+    time_s = float(data.time)
+    if odometry.previous_time is not None:
+        dt = max(0.0, time_s - odometry.previous_time)
+        odometry.position += 0.5 * (odometry.speed + speed) * dt
+    odometry.speed = speed
+    odometry.previous_time = time_s
+    return odometry
 
 
 def wheel_positions(mujoco, model, data) -> tuple[float, float]:

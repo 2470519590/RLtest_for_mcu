@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +11,8 @@ import numpy as np
 from .io.cli import build_parser
 from .core.constants import (
     DEFAULT_LQR_K,
+    LEG_THETA_SYNC_KD,
+    LEG_THETA_SYNC_KP,
     LOCKED_EQUILIBRIUM_EVAL_STEPS,
     LOCKED_EQUILIBRIUM_FL0,
     LOCKED_EQUILIBRIUM_QPOS,
@@ -32,6 +35,8 @@ from .core.constants import (
     LOCKED_LQR_U0,
     LOCKED_LQR_X0,
     PROJECT_ROOT,
+    YAW_TURN_KP,
+    YAW_TURN_KD,
 )
 from .experiments.equilibrium import (
     _equilibrium_score,
@@ -65,6 +70,7 @@ from .core.mujoco_utils import (
 from .io.output import (
     plot_lqr_history as _plot_lqr_history,
     plot_motor_torque_history as _plot_motor_torque_history,
+    plot_turning_history as _plot_turning_history,
     resolve_output_path as _resolve_output_path,
     write_lqr_history_csv as _write_lqr_history_csv,
 )
@@ -186,9 +192,25 @@ def run_smoke(
     use_locked_equilibrium: bool,
     diagnostics_only: bool,
     realtime: bool,
+    speed_profile: str | None,
+    turn_direction: str | None,
+    turn_test: bool,
+    ramp_test: str | None,
+    leg_sync_kp: float,
+    leg_sync_kd: float,
+    yaw_turn_kp: float,
+    yaw_turn_kd: float,
 ) -> int:
     mujoco = _load_mujoco()
     model = mujoco.MjModel.from_xml_path(str(model_path))
+    if ramp_test is not None:
+        inactive_side = "right" if ramp_test == "left" else "left"
+        inactive_name = f"{inactive_side}_rear_single_wheel_ramp"
+        inactive_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, inactive_name)
+        if inactive_id < 0:
+            raise ValueError(f"ramp geom not found: {inactive_name}")
+        model.geom_contype[inactive_id] = 0
+        model.geom_conaffinity[inactive_id] = 0
     behavior_passed = True
     estimated_support_force_per_leg = _estimated_support_force_per_leg(model)
     if virtual_rod_gravity_comp_scale is not None:
@@ -206,6 +228,18 @@ def run_smoke(
     if impact_level is not None:
         force = 40.0 if impact_level == "small" else 80.0
         print(f"impact: {impact_level}, +X {force:.0f} N, t=3.0 s, duration=0.15 s")
+    if speed_profile is not None:
+        speed = {"low": 1.00, "medium": 2.00, "high": 3.00}[speed_profile]
+        print(f"speed_profile: {speed_profile}, peak={speed:.2f} m/s, ramp=1.5 s, cruise=4.0 s")
+    if turn_direction is not None:
+        print(f"turn: {turn_direction}, desired_yaw_rate=0.35 rad/s")
+    if turn_test:
+        print("turn_test: yaw-rate stages=0.15, 0.35, 0.60, 0.35, 0.15 rad/s")
+    if turn_test:
+        print(f"yaw_turn_pd: kp={yaw_turn_kp:.6g}, kd={yaw_turn_kd:.6g}")
+        print(f"leg_sync_pd: kp={leg_sync_kp:.6g}, kd={leg_sync_kd:.6g}")
+    if ramp_test is not None:
+        print(f"ramp_test: {ramp_test}, reverse speed peak=-0.50 m/s; opposite ramp collision disabled")
     print()
 
     if print_virtual_leg or virtual_rod_test:
@@ -543,6 +577,14 @@ def run_smoke(
             trace_control_plot,
             initial_data=lqr_operating_data,
             impact_level=impact_level,
+            speed_profile=speed_profile,
+            turn_direction=turn_direction,
+            turn_test=turn_test,
+            ramp_test=ramp_test,
+            leg_sync_kp=leg_sync_kp,
+            leg_sync_kd=leg_sync_kd,
+            yaw_turn_kp=yaw_turn_kp,
+            yaw_turn_kd=yaw_turn_kd,
         )
         print()
         print("virtual_rod_test:")
@@ -690,7 +732,17 @@ def run_smoke(
             print(f"  history_csv: {csv_path}")
         if history_plot is not None:
             plot_path = _resolve_output_path(history_plot)
-            _plot_lqr_history(plot_path, virtual_result.history)
+            if turn_test:
+                _plot_turning_history(
+                    plot_path,
+                    virtual_result.history,
+                    yaw_turn_kp,
+                    yaw_turn_kd,
+                    leg_sync_kp,
+                    leg_sync_kd,
+                )
+            else:
+                _plot_lqr_history(plot_path, virtual_result.history)
             print(f"  history_plot: {plot_path}")
         if motor_torque_plot is not None:
             plot_path = _resolve_output_path(motor_torque_plot)
@@ -750,6 +802,14 @@ def run_smoke(
                 lqr_operating_data,
                 realtime,
                 impact_level,
+                speed_profile,
+                turn_direction,
+                turn_test,
+                ramp_test,
+                leg_sync_kp,
+                leg_sync_kd,
+                yaw_turn_kp,
+                yaw_turn_kd,
             )
         else:
             print("visualize: opening MuJoCo viewer for PD hold")
@@ -773,7 +833,7 @@ def run_smoke(
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.lqr_true_equilibrium:
+    if args.lqr_true_equilibrium or args.turn_test or args.ramp_test is not None:
         args.virtual_rod_test = True
         if abs(args.leg_length - LOCKED_EQUILIBRIUM_L0) > 1e-9:
             parser.error("--lqr-true-equilibrium is locked to --leg-length 0.35")
@@ -817,6 +877,25 @@ def main(argv: list[str] | None = None) -> int:
         args.right_rod_theta = LOCKED_EQUILIBRIUM_THETA
         args.lqr_design_steps = LOCKED_LQR_DESIGN_STEPS
         args.lqr_control_period_steps = LOCKED_LQR_CONTROL_PERIOD_STEPS
+    if args.turn_test or args.ramp_test is not None:
+        args.virtual_rod_test = True
+        args.lqr_test = True
+        args.lqr_auto_design = False
+        args.use_locked_equilibrium = True
+        args.speed_profile = None
+        args.impact_level = None
+        if args.turn_test:
+            args.turn_direction = None
+    if args.turn_test and args.ramp_test is not None:
+        parser.error("--turn-test and --ramp-test are separate scenarios")
+    if args.turn_pd_plot:
+        if not args.turn_test:
+            parser.error("--turn-pd-plot requires --turn-test")
+        if args.history_plot is not None:
+            parser.error("--turn-pd-plot cannot be combined with --history-plot")
+        args.history_plot = Path("output") / f"{datetime.now():%H%M%S}.png"
+        if args.visualize_seconds is not None:
+            args.virtual_rod_steps = int(math.ceil(args.visualize_seconds / 0.001))
     if args.wheel_balance_only:
         args.virtual_rod_test = True
         args.lqr_test = True
@@ -853,6 +932,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.ik_search_samples <= 0:
         parser.error("--ik-search-samples must be positive")
     lqr_auto_design = bool(args.lqr_auto_design or (args.lqr_test and args.lqr_k is None))
+    leg_sync_kp = LEG_THETA_SYNC_KP if args.leg_sync_kp is None else args.leg_sync_kp
+    leg_sync_kd = LEG_THETA_SYNC_KD if args.leg_sync_kd is None else args.leg_sync_kd
+    if leg_sync_kp < 0.0 or leg_sync_kd < 0.0:
+        parser.error("--leg-sync-kp/--leg-sync-kd must be non-negative")
+    yaw_turn_kp = YAW_TURN_KP if args.yaw_turn_kp is None else args.yaw_turn_kp
+    yaw_turn_kd = YAW_TURN_KD if args.yaw_turn_kd is None else args.yaw_turn_kd
+    if yaw_turn_kp < 0.0 or yaw_turn_kd < 0.0:
+        parser.error("--yaw-turn-kp/--yaw-turn-kd must be non-negative")
     lqr_wheel_sign = args.lqr_wheel_sign
     lqr_pitch_sign = args.lqr_pitch_sign
     lqr_output_rate_limit = args.lqr_output_rate_limit
@@ -1097,6 +1184,14 @@ def main(argv: list[str] | None = None) -> int:
         args.use_locked_equilibrium,
         args.diagnostics_only,
         not args.no_realtime,
+        args.speed_profile,
+        args.turn_direction,
+        args.turn_test,
+        args.ramp_test,
+        leg_sync_kp,
+        leg_sync_kd,
+        yaw_turn_kp,
+        yaw_turn_kd,
     )
 
 

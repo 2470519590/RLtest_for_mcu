@@ -637,8 +637,10 @@ def _lqr_middle_control(
     lqr_x_outer_kp: float,
     lqr_x_outer_max_v: float,
     x_reference_rate: float = 0.0,
+    velocity_only: bool = False,
+    odometry=None,
 ) -> tuple[float, float, float, LqrState, float]:
-    state = _compute_lqr_state(mujoco, model, data, x_reference, x_source, x_reference_rate)
+    state = _compute_lqr_state(mujoco, model, data, x_reference, x_source, x_reference_rate, odometry)
     wheel_torque, virtual_pitch_torque, length_force_delta, x_velocity_reference = _lqr_middle_control_from_state(
         state,
         gain_scale,
@@ -651,8 +653,9 @@ def _lqr_middle_control(
         lqr_tp_limit,
         lqr_x_outer_kp,
         lqr_x_outer_max_v,
+        velocity_only,
     )
-    return wheel_torque, virtual_pitch_torque, length_force_delta, state, x_velocity_reference
+    return wheel_torque, virtual_pitch_torque, length_force_delta, state, x_velocity_reference + x_reference_rate
 
 
 def _collect_lqr_history_sample(
@@ -664,14 +667,31 @@ def _collect_lqr_history_sample(
     pitch_torque: float,
     left_pitch_torque: float,
     right_pitch_torque: float,
+    yaw_rate_reference: float,
+    yaw_rate: float,
+    yaw_rate_filtered: float,
+    yaw_error: float,
+    yaw_error_rate_raw: float,
+    yaw_error_rate: float,
+    yaw_p_torque: float,
+    yaw_d_torque: float,
+    turn_torque: float,
+    sync_error_raw: float,
+    sync_error: float,
+    sync_error_rate_raw: float,
+    sync_error_rate: float,
+    sync_p_torque: float,
+    sync_d_torque: float,
+    sync_torque: float,
     x_reference: float,
     x_source: str,
     left_target: tuple[float, float],
     right_target: tuple[float, float],
     vmc_diagnostics: dict[str, VmcDiagnostics] | None = None,
     x_velocity_reference: float = 0.0,
+    odometry=None,
 ) -> LqrHistorySample:
-    lqr_state = _compute_lqr_state(mujoco, model, data, x_reference, x_source)
+    lqr_state = _compute_lqr_state(mujoco, model, data, x_reference, x_source, odometry=odometry)
     left = _compute_virtual_leg_state(mujoco, model, data, "left")
     right = _compute_virtual_leg_state(mujoco, model, data, "right")
     left_branch = _compute_leg_branch_metrics(mujoco, model, data, "left")
@@ -702,6 +722,22 @@ def _collect_lqr_history_sample(
         pitch_torque=pitch_torque,
         left_pitch_torque=left_pitch_torque,
         right_pitch_torque=right_pitch_torque,
+        yaw_rate_reference=yaw_rate_reference,
+        yaw_rate=yaw_rate,
+        yaw_rate_filtered=yaw_rate_filtered,
+        yaw_error=yaw_error,
+        yaw_error_rate_raw=yaw_error_rate_raw,
+        yaw_error_rate=yaw_error_rate,
+        yaw_p_torque=yaw_p_torque,
+        yaw_d_torque=yaw_d_torque,
+        turn_torque=turn_torque,
+        sync_error_raw=sync_error_raw,
+        sync_error=sync_error,
+        sync_error_rate_raw=sync_error_rate_raw,
+        sync_error_rate=sync_error_rate,
+        sync_p_torque=sync_p_torque,
+        sync_d_torque=sync_d_torque,
+        sync_torque=sync_torque,
         base_height=float(data.qpos[2]) if model.nq >= 3 else math.nan,
         max_abs_ctrl=float(np.max(np.abs(data.ctrl))),
         left_length=left.length,
@@ -724,6 +760,8 @@ def _collect_lqr_history_sample(
         right_rear_tau=right_diag.joint_tau_rear,
         left_theta=left.theta,
         right_theta=right.theta,
+        left_theta_rate=left.theta_rate,
+        right_theta_rate=right.theta_rate,
         left_branch_violation=left_branch.violation,
         right_branch_violation=right_branch.violation,
         left_front_ctrl=left_front_ctrl,

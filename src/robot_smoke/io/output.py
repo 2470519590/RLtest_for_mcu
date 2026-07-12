@@ -199,6 +199,99 @@ def plot_lqr_history(path: Path, samples: tuple[LqrHistorySample, ...]) -> None:
     plt.close(figure)
 
 
+def plot_turning_history(
+    path: Path,
+    samples: tuple[LqrHistorySample, ...],
+    yaw_kp: float,
+    yaw_kd: float,
+    sync_kp: float,
+    sync_kd: float,
+) -> None:
+    """Plot only the yaw-rate and dual-leg synchronization PD quantities."""
+    if not samples:
+        return
+    import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    time_s = np.array([sample.time_s for sample in samples], dtype=float)
+    yaw_rate_reference = np.array([sample.yaw_rate_reference for sample in samples], dtype=float)
+    yaw_rate = np.array([sample.yaw_rate for sample in samples], dtype=float)
+    yaw_rate_filtered = np.array([sample.yaw_rate_filtered for sample in samples], dtype=float)
+    left_theta = np.array([sample.left_theta for sample in samples], dtype=float)
+    right_theta = np.array([sample.right_theta for sample in samples], dtype=float)
+    left_theta_rate = np.array([sample.left_theta_rate for sample in samples], dtype=float)
+    right_theta_rate = np.array([sample.right_theta_rate for sample in samples], dtype=float)
+    turn_torque = np.array([sample.turn_torque for sample in samples], dtype=float)
+    sync_torque = np.array([sample.sync_torque for sample in samples], dtype=float)
+    plot_mask = time_s <= 6.0
+    time_s = time_s[plot_mask]
+    yaw_rate_reference = yaw_rate_reference[plot_mask]
+    yaw_rate = yaw_rate[plot_mask]
+    yaw_rate_filtered = yaw_rate_filtered[plot_mask]
+    left_theta = left_theta[plot_mask]
+    right_theta = right_theta[plot_mask]
+    left_theta_rate = left_theta_rate[plot_mask]
+    right_theta_rate = right_theta_rate[plot_mask]
+    turn_torque = turn_torque[plot_mask]
+    sync_torque = sync_torque[plot_mask]
+    yaw_error_rate_raw = np.array([sample.yaw_error_rate_raw for sample in samples], dtype=float)[plot_mask]
+    yaw_error_rate = np.array([sample.yaw_error_rate for sample in samples], dtype=float)[plot_mask]
+    yaw_p_torque = np.array([sample.yaw_p_torque for sample in samples], dtype=float)[plot_mask]
+    yaw_d_torque = np.array([sample.yaw_d_torque for sample in samples], dtype=float)[plot_mask]
+    sync_error_raw = np.array([sample.sync_error_raw for sample in samples], dtype=float)[plot_mask]
+    sync_error = np.array([sample.sync_error for sample in samples], dtype=float)[plot_mask]
+    sync_error_rate_raw = np.array([sample.sync_error_rate_raw for sample in samples], dtype=float)[plot_mask]
+    sync_error_rate = np.array([sample.sync_error_rate for sample in samples], dtype=float)[plot_mask]
+    sync_p_torque = np.array([sample.sync_p_torque for sample in samples], dtype=float)[plot_mask]
+    sync_d_torque = np.array([sample.sync_d_torque for sample in samples], dtype=float)[plot_mask]
+    figure, axes = plt.subplots(6, 1, figsize=(10, 14), sharex=True)
+    axes[0].plot(time_s, yaw_rate_reference, label="yaw_rate_ref")
+    axes[0].plot(time_s, yaw_rate, label="yaw_rate raw")
+    axes[0].plot(time_s, yaw_rate_filtered, label="yaw_rate filtered", linestyle="--")
+    axes[0].set_ylabel("rad/s")
+    axes[0].legend(loc="upper right")
+    axes[0].grid(True)
+    axes[1].plot(time_s, yaw_error_rate_raw, label="yaw D raw", alpha=0.55)
+    axes[1].plot(time_s, yaw_error_rate, label="yaw D filtered")
+    axes[1].set_ylabel("rad/s^2")
+    axes[1].legend(loc="upper right")
+    axes[1].grid(True)
+    axes[2].plot(time_s, yaw_p_torque, label="yaw P")
+    axes[2].plot(time_s, yaw_d_torque, label="yaw D")
+    axes[2].plot(time_s, turn_torque, label="tau_turn clipped", linewidth=1.5)
+    axes[2].set_ylabel("N m")
+    axes[2].legend(loc="upper right")
+    axes[2].grid(True)
+    axes[3].plot(time_s, left_theta, label="theta_left actual")
+    axes[3].plot(time_s, right_theta, label="theta_right actual")
+    axes[3].plot(time_s, sync_error_raw, label="sync error raw", alpha=0.6)
+    axes[3].plot(time_s, sync_error, label="sync error filtered", linestyle="--")
+    axes[3].axhline(0.0, color="black", linestyle="--", linewidth=1.0, label="theta_ref=0")
+    axes[3].set_ylabel("rad")
+    axes[3].legend(loc="upper right")
+    axes[3].grid(True)
+    axes[4].plot(time_s, sync_error_rate_raw, label="sync D raw", alpha=0.55)
+    axes[4].plot(time_s, sync_error_rate, label="sync D filtered")
+    axes[4].axhline(0.0, color="black", linestyle="--", linewidth=1.0, label="D reference=0")
+    axes[4].set_ylabel("rad/s")
+    axes[4].legend(loc="upper right")
+    axes[4].grid(True)
+    axes[5].plot(time_s, sync_p_torque, label="sync P")
+    axes[5].plot(time_s, sync_d_torque, label="sync D")
+    axes[5].plot(time_s, sync_torque, label="Tp_sync", linewidth=1.5)
+    axes[5].set_ylabel("N m")
+    axes[5].set_xlabel("time (s)")
+    axes[5].legend(loc="upper right")
+    axes[5].grid(True)
+    figure.suptitle(
+        f"Yaw PD: Kp={yaw_kp:g}, Kd={yaw_kd:g}    |    "
+        f"Leg-sync PD: Kp={sync_kp:g}, Kd={sync_kd:g}    |    actual vs reference | 0-6 s"
+    )
+    figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+    figure.savefig(path, dpi=160)
+    plt.close(figure)
+
+
 def plot_motor_torque_history(path: Path, samples: tuple[LqrHistorySample, ...]) -> None:
     if not samples:
         return

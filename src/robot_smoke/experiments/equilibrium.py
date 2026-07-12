@@ -249,8 +249,8 @@ def _run_single_equilibrium_candidate(
             Tp_sat_count += 1
         left_leg = _compute_virtual_leg_state(mujoco, model, data, "left")
         right_leg = _compute_virtual_leg_state(mujoco, model, data, "right")
-        sync_torque = -LEG_THETA_SYNC_KP * (left_leg.theta - right_leg.theta) - LEG_THETA_SYNC_KD * (
-            left_leg.theta_rate - right_leg.theta_rate
+        sync_torque = LEG_THETA_SYNC_KP * (right_leg.theta - left_leg.theta) + LEG_THETA_SYNC_KD * (
+            right_leg.theta_rate - left_leg.theta_rate
         )
         _, saturated, _, _ = _virtual_rod_ik_ctrl(
             mujoco,

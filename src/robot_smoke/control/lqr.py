@@ -8,12 +8,11 @@ import numpy as np
 
 from ..model.kinematics import (
     compute_virtual_leg_state as _compute_virtual_leg_state,
-    wheel_positions as _wheel_positions,
     wheel_center_positions as _wheel_center_positions,
     wheel_radius as _wheel_radius,
     wheel_center_speeds as _wheel_center_speeds,
 )
-from ..core.types import LqrState
+from ..core.types import LqrState, SimulatedOdometry
 
 
 def base_pitch_from_qpos(qpos: np.ndarray) -> float:
@@ -42,12 +41,17 @@ def lqr_state_from_measurements(
     x_reference: float,
     x_source: str,
     x_reference_rate: float = 0.0,
+    odometry: SimulatedOdometry | None = None,
 ) -> LqrState:
     if x_source == "wheel":
-        left_wheel_x, right_wheel_x = wheel_positions
-        left_wheel_v, right_wheel_v = wheel_speeds
-        x_value = 0.5 * (left_wheel_x + right_wheel_x) - x_reference
-        x_rate = 0.5 * (left_wheel_v + right_wheel_v) - x_reference_rate
+        if odometry is None:
+            left_wheel_x, right_wheel_x = wheel_positions
+            left_wheel_v, right_wheel_v = wheel_speeds
+            x_value = 0.5 * (left_wheel_x + right_wheel_x) - x_reference
+            x_rate = 0.5 * (left_wheel_v + right_wheel_v) - x_reference_rate
+        else:
+            x_value = odometry.position - x_reference
+            x_rate = odometry.speed - x_reference_rate
     elif x_source == "base":
         x_value = float(qpos[0]) - x_reference
         x_rate = float(qvel[0]) - x_reference_rate
@@ -82,7 +86,8 @@ def lqr_state_vector(state: LqrState) -> np.ndarray:
 
 
 def compute_lqr_state(
-    mujoco, model, data, x_reference: float, x_source: str = "wheel", x_reference_rate: float = 0.0
+    mujoco, model, data, x_reference: float, x_source: str = "wheel", x_reference_rate: float = 0.0,
+    odometry: SimulatedOdometry | None = None,
 ) -> LqrState:
     left = _compute_virtual_leg_state(mujoco, model, data, "left")
     right = _compute_virtual_leg_state(mujoco, model, data, "right")
@@ -103,6 +108,7 @@ def compute_lqr_state(
         x_reference,
         x_source,
         x_reference_rate,
+        odometry,
     )
 
 
@@ -195,11 +201,15 @@ def lqr_middle_control_from_state(
     lqr_tp_limit: float,
     lqr_x_outer_kp: float,
     lqr_x_outer_max_v: float,
+    velocity_only: bool = False,
 ) -> tuple[float, float, float, float]:
     x_velocity_reference = 0.0
     inner_x_error = state.x
     inner_x_rate_error = state.x_rate
-    if lqr_x_outer_kp > 0.0:
+    if velocity_only:
+        inner_x_error = float(lqr_x0[2])
+        inner_x_rate_error = state.x_rate
+    elif lqr_x_outer_kp > 0.0:
         position_error = state.x - float(lqr_x0[2])
         x_velocity_reference = float(
             np.clip(-lqr_x_outer_kp * position_error, -lqr_x_outer_max_v, lqr_x_outer_max_v)
