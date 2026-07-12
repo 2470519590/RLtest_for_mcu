@@ -90,6 +90,7 @@ from .model.mechanics import (
     _print_static_operating_point_sample,
     _set_base_height_for_wheel_contact,
     _standing_base_qpos_for_virtual_leg_target,
+    apply_base_impact as _apply_base_impact,
 )
 from .core.mujoco_utils import (
     assert_finite as _assert_finite,
@@ -354,6 +355,7 @@ def _visualize_virtual_rod_test(
     wheel_ctrl_deadzone: float,
     initial_data: object | None,
     realtime: bool,
+    impact_level: str | None = None,
 ) -> None:
     import mujoco.viewer  # pylint: disable=import-outside-toplevel
 
@@ -384,6 +386,7 @@ def _visualize_virtual_rod_test(
         viewer.sync()
         wall_start = time.perf_counter()
         for step in range(steps):
+            _apply_base_impact(mujoco, model, data, impact_level, step)
             if lock_base:
                 _lock_base_to_initial(mujoco, model, data)
             wheel_torque = previous_wheel_torque

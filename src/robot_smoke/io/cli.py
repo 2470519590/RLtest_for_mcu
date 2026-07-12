@@ -56,6 +56,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--motor-torque-plot", type=Path)
     parser.add_argument("--diagnostics-only", action="store_true")
     parser.add_argument("--no-realtime", action="store_true")
+    parser.add_argument(
+        "--impact",
+        dest="impact_level",
+        choices=("small", "medium"),
+        help="apply one fixed horizontal base impact",
+    )
 
     parser.set_defaults(
         zero_steps=200,
@@ -164,5 +170,7 @@ def build_parser() -> argparse.ArgumentParser:
         equilibrium_wheel_dampings=(LOCKED_EQUILIBRIUM_WHEEL_DAMPING,),
         equilibrium_init_drop_steps=0,
         print_static_operating_point=False,
+        impact_level=None,
+        use_locked_equilibrium=False,
     )
     return parser

@@ -12,6 +12,7 @@ from .core.constants import (
     DEFAULT_LQR_K,
     LOCKED_EQUILIBRIUM_EVAL_STEPS,
     LOCKED_EQUILIBRIUM_FL0,
+    LOCKED_EQUILIBRIUM_QPOS,
     LOCKED_EQUILIBRIUM_FL0_SCALE,
     LOCKED_EQUILIBRIUM_L0,
     LOCKED_EQUILIBRIUM_LENGTH_KD,
@@ -27,6 +28,9 @@ from .core.constants import (
     LOCKED_EQUILIBRIUM_WHEEL_DAMPING,
     LOCKED_LQR_CONTROL_PERIOD_STEPS,
     LOCKED_LQR_DESIGN_STEPS,
+    LOCKED_LQR_K,
+    LOCKED_LQR_U0,
+    LOCKED_LQR_X0,
     PROJECT_ROOT,
 )
 from .experiments.equilibrium import (
@@ -178,6 +182,8 @@ def run_smoke(
     equilibrium_pitch_kd: float,
     lqr_use_equilibrium_operating_point: bool,
     print_static_operating_point: bool,
+    impact_level: str | None,
+    use_locked_equilibrium: bool,
     diagnostics_only: bool,
     realtime: bool,
 ) -> int:
@@ -197,6 +203,9 @@ def run_smoke(
     print(f"njnt: {model.njnt}")
     print(f"timestep: {model.opt.timestep}")
     print(f"estimated_support_force_per_leg: {estimated_support_force_per_leg:.6g}")
+    if impact_level is not None:
+        force = 40.0 if impact_level == "small" else 80.0
+        print(f"impact: {impact_level}, +X {force:.0f} N, t=3.0 s, duration=0.15 s")
     print()
 
     if print_virtual_leg or virtual_rod_test:
@@ -306,6 +315,17 @@ def run_smoke(
     lqr_design_result: LqrDesignResult | None = None
     lqr_operating_data = None
     lqr_operating_u0 = None
+    if use_locked_equilibrium:
+        lqr_operating_data = mujoco.MjData(model)
+        lqr_operating_data.qpos[:] = LOCKED_EQUILIBRIUM_QPOS
+        lqr_operating_data.qvel[:] = 0.0
+        lqr_operating_data.ctrl[:] = 0.0
+        mujoco.mj_forward(model, lqr_operating_data)
+        lqr_operating_u0 = LOCKED_LQR_U0.copy()
+        lqr_x0 = LOCKED_LQR_X0.copy()
+        lqr_u0 = LOCKED_LQR_U0.copy()
+        virtual_rod_length_force_ff = LOCKED_EQUILIBRIUM_FL0
+        print("lqr_operating_point: locked 0.35 m equilibrium")
     if lqr_test and lqr_auto_design:
         if lqr_use_equilibrium_operating_point:
             if best_equilibrium is None:
@@ -522,6 +542,7 @@ def run_smoke(
             trace_control_csv,
             trace_control_plot,
             initial_data=lqr_operating_data,
+            impact_level=impact_level,
         )
         print()
         print("virtual_rod_test:")
@@ -728,6 +749,7 @@ def run_smoke(
                 wheel_ctrl_deadzone,
                 lqr_operating_data,
                 realtime,
+                impact_level,
             )
         else:
             print("visualize: opening MuJoCo viewer for PD hold")
@@ -753,10 +775,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.lqr_true_equilibrium:
         args.virtual_rod_test = True
-        args.equilibrium_search = True
+        if abs(args.leg_length - LOCKED_EQUILIBRIUM_L0) > 1e-9:
+            parser.error("--lqr-true-equilibrium is locked to --leg-length 0.35")
+        args.equilibrium_search = False
         args.lqr_test = True
-        args.lqr_auto_design = True
-        args.lqr_use_equilibrium_operating_point = True
+        args.lqr_auto_design = False
+        args.lqr_use_equilibrium_operating_point = False
+        args.use_locked_equilibrium = True
+        args.lqr_k = LOCKED_LQR_K.copy()
+        args.lqr_x0 = LOCKED_LQR_X0.copy()
+        args.lqr_u0 = LOCKED_LQR_U0.copy()
         args.zero_steps = 1
         args.probe_steps = 1
         args.pd_hold_steps = 1
@@ -794,6 +822,7 @@ def main(argv: list[str] | None = None) -> int:
         args.lqr_test = True
         args.lqr_auto_design = True
         args.lqr_use_equilibrium_operating_point = True
+        args.use_locked_equilibrium = False
         args.equilibrium_search = True
         args.virtual_rod_control = "off"
     model_path = args.model
@@ -1064,6 +1093,8 @@ def main(argv: list[str] | None = None) -> int:
         args.equilibrium_pitch_kd,
         args.lqr_use_equilibrium_operating_point,
         args.print_static_operating_point,
+        args.impact_level,
+        args.use_locked_equilibrium,
         args.diagnostics_only,
         not args.no_realtime,
     )

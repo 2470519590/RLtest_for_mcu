@@ -25,6 +25,7 @@ from ..model.kinematics import (
 )
 from ..control.ik import _virtual_rod_ik_ctrl
 from ..model.mechanics import _collect_static_operating_point_sample
+from ..model.mechanics import apply_base_impact as _apply_base_impact
 from ..core.mujoco_utils import assert_finite as _assert_finite
 from ..core.mujoco_utils import copy_data as _copy_data
 from ..core.mujoco_utils import id_by_name as _id_by_name
@@ -101,6 +102,7 @@ def _run_virtual_rod_test(
     trace_control_csv: Path | None,
     trace_control_plot: Path | None,
     initial_data: object | None = None,
+    impact_level: str | None = None,
 ) -> VirtualRodResult:
     if initial_data is not None:
         data = _copy_data(mujoco, model, initial_data)
@@ -148,6 +150,7 @@ def _run_virtual_rod_test(
     trace_stats = ControlTraceStats()
     trace_samples: list[ControlTraceSample] = []
     for step in range(steps):
+        _apply_base_impact(mujoco, model, data, impact_level, step)
         if lock_base:
             _lock_base_to_initial(mujoco, model, data)
         wheel_torque = previous_wheel_torque

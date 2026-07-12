@@ -106,6 +106,19 @@ def _set_base_height_for_wheel_contact(mujoco, model, data) -> None:
         mujoco.mj_forward(model, data)
 
 
+def apply_base_impact(mujoco, model, data, impact_level: str | None, step: int) -> None:
+    """Apply one fixed horizontal base impulse for disturbance tests."""
+    data.xfrc_applied[:] = 0.0
+    if impact_level not in ("small", "medium"):
+        return
+    timestep = float(model.opt.timestep)
+    start = int(round(3.0 / timestep))
+    duration = max(1, int(round(0.15 / timestep)))
+    if start <= step < start + duration:
+        base_id = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, "base")
+        data.xfrc_applied[base_id, 0] = 40.0 if impact_level == "small" else 80.0
+
+
 def _collect_static_operating_point_sample(
     mujoco,
     model,
