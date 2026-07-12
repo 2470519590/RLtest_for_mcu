@@ -86,8 +86,6 @@ def run_smoke(
     virtual_rod_test: bool,
     virtual_rod_lock_base: bool,
     virtual_rod_steps: int,
-    disturbance_force_x: float,
-    target_speed: float,
     virtual_rod_length_delta: float | None,
     virtual_rod_theta_target: float,
     left_rod_length: float | None,
@@ -323,7 +321,10 @@ def run_smoke(
                 lqr_operating_data.ctrl[:] = 0.0
                 mujoco.mj_forward(model, lqr_operating_data)
                 lqr_operating_u0 = np.array(
-                    [0.0, best_equilibrium.final_sample.pitch_torque, 0.0],
+                    [
+                        best_equilibrium.final_sample.wheel_torque / lqr_wheel_sign,
+                        best_equilibrium.final_sample.pitch_torque / lqr_pitch_sign,
+                    ],
                     dtype=float,
                 )
                 lqr_x0 = _lqr_state_vector(
@@ -352,6 +353,9 @@ def run_smoke(
             lqr_input_eps,
             lqr_design_steps,
             lqr_x_source,
+            lqr_wheel_sign,
+            lqr_pitch_sign,
+            leg_control_enabled=virtual_rod_control != "off",
             operating_data=lqr_operating_data,
             operating_u0=lqr_operating_u0,
         )
@@ -518,15 +522,11 @@ def run_smoke(
             trace_control_csv,
             trace_control_plot,
             initial_data=lqr_operating_data,
-            disturbance_force_x=disturbance_force_x,
-            target_speed=target_speed,
         )
         print()
         print("virtual_rod_test:")
         print(f"  steps: {virtual_result.steps}")
         print(f"  lock_base: {virtual_result.lock_base}")
-        print(f"  base_disturbance_force_x_N: {disturbance_force_x:.6g}")
-        print(f"  base_disturbance_duration_s: {0.1 if disturbance_force_x != 0.0 else 0.0:.6g}")
         print(f"  control: {virtual_rod_control}")
         print(
             f"  left_target: l={virtual_result.left_target_length:.6g}, "
@@ -575,9 +575,9 @@ def run_smoke(
             for row in _format_matrix_rows(lqr_k):
                 print(f"    {row}")
             print("  theta_pd_main_disabled: True")
-            print("  lqr_state_order: theta, theta_rate, x, x_rate, pitch, pitch_rate, L, dL")
-            print("  lqr_input_order: T, Tp, delta_F_l")
-            print("  lqr_law: [T, Tp, delta_F_l]^T = U0 - lqr_gain_scale * K * (X - X0)")
+            print("  lqr_state_order: theta_world, dtheta_world, x, dx, phi, dphi")
+            print("  lqr_input_order: T, Tp")
+            print("  lqr_law: [T, Tp]^T = U0 - lqr_gain_scale * K * (X - X0)")
             print("  lqr_x0: [" + ", ".join(f"{value:.6g}" for value in lqr_x0) + "]")
             print("  lqr_u0: [" + ", ".join(f"{value:.6g}" for value in lqr_u0) + "]")
             print("  lqr_T_limit: +/-lqr_t_limit")
@@ -595,7 +595,7 @@ def run_smoke(
             )
             print(f"  vmc_length_force_rate_limit: {virtual_rod_length_force_rate_limit:.6g}")
             if lqr_design_result is not None:
-                print("  lqr_design: local finite-difference linearization + iterative DARE")
+                print("  lqr_design: finite-difference A + measured local B + iterative DARE")
                 print(f"  lqr_design_q_diag: {list(lqr_design_result.q_diag)}")
                 print(f"  lqr_design_r_diag: {list(lqr_design_result.r_diag)}")
                 print(f"  lqr_design_state_eps: {list(lqr_design_result.state_eps)}")
@@ -726,8 +726,7 @@ def run_smoke(
                 lqr_output_rate_limit,
                 lqr_output_lowpass_hz,
                 wheel_ctrl_deadzone,
-                disturbance_force_x,
-                target_speed,
+                lqr_operating_data,
                 realtime,
             )
         else:
@@ -790,6 +789,13 @@ def main(argv: list[str] | None = None) -> int:
         args.right_rod_theta = LOCKED_EQUILIBRIUM_THETA
         args.lqr_design_steps = LOCKED_LQR_DESIGN_STEPS
         args.lqr_control_period_steps = LOCKED_LQR_CONTROL_PERIOD_STEPS
+    if args.wheel_balance_only:
+        args.virtual_rod_test = True
+        args.lqr_test = True
+        args.lqr_auto_design = True
+        args.lqr_use_equilibrium_operating_point = True
+        args.equilibrium_search = True
+        args.virtual_rod_control = "off"
     model_path = args.model
     if not model_path.is_absolute():
         model_path = PROJECT_ROOT / model_path
@@ -831,7 +837,7 @@ def main(argv: list[str] | None = None) -> int:
         lqr_gain_scale = 1.0
     if lqr_gain_scale < 0.0:
         parser.error("--lqr-gain-scale must be non-negative")
-    lqr_k = DEFAULT_LQR_K if args.lqr_k is None else np.array(args.lqr_k, dtype=float).reshape(3, 8)
+    lqr_k = DEFAULT_LQR_K if args.lqr_k is None else np.array(args.lqr_k, dtype=float).reshape(2, 6)
     lqr_x0 = np.array(args.lqr_x0, dtype=float)
     lqr_u0 = np.array(args.lqr_u0, dtype=float)
     lqr_q_diag = np.array(args.lqr_q_diag, dtype=float)
@@ -948,7 +954,6 @@ def main(argv: list[str] | None = None) -> int:
     ) < 0.0:
         parser.error("virtual rod gains must be non-negative")
     use_virtual_rod_test = args.virtual_rod_test or args.lqr_test
-    disturbance_force_x = {"none": 0.0, "small": 2.0, "medium": 8.0}[args.disturbance]
     return run_smoke(
         model_path,
         args.zero_steps,
@@ -967,8 +972,6 @@ def main(argv: list[str] | None = None) -> int:
         use_virtual_rod_test,
         args.lock_base,
         args.virtual_rod_steps,
-        disturbance_force_x,
-        args.target_speed,
         args.virtual_rod_length_delta,
         args.virtual_rod_theta_target,
         args.left_rod_length,

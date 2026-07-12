@@ -27,19 +27,32 @@ LOCKED_EQUILIBRIUM_WHEEL_DAMPING = 0.5
 LOCKED_EQUILIBRIUM_TP_BIAS = 0.0
 LOCKED_EQUILIBRIUM_FL0 = 34.5262
 LOCKED_LQR_DESIGN_STEPS = 5
-LOCKED_LQR_CONTROL_PERIOD_STEPS = 1
+LOCKED_LQR_CONTROL_PERIOD_STEPS = 5
+
+# Local physical input map measured at L=0.35 m, theta_world=0, free base.
+# Rows are Xdot=[theta_dot, theta_ddot, x_dot, x_ddot, phi_dot, phi_ddot].
+# Columns are the physical commands [T, Tp] before runtime sign conventions.
+MEASURED_LQR_B_CONTINUOUS = np.array(
+    [
+        [0.0, 0.0],
+        [5.7643581, 5.5843861],
+        [0.0, 0.0],
+        [2.0242316, 1.0726022],
+        [0.0, 0.0],
+        [-1.8469763, 7.6178206],
+    ],
+    dtype=float,
+)
 
 # The sagittal model assumes both virtual legs move in phase. The 3-D model
 # needs a small differential damper to enforce that assumption.
 LEG_THETA_SYNC_KP = 8.0
 LEG_THETA_SYNC_KD = 2.0
-LQR_LENGTH_FORCE_DELTA_LIMIT = 50.0
 
 DEFAULT_LQR_K = np.array(
     [
-        [-44.3788, -6.8496, -22.2828, -21.5569, 28.7706, 4.3751, 0.0, 0.0],
-        [11.2006, 0.7339, 3.73, 3.2058, 151.73, 4.6387, 0.0, 0.0],
-        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [-44.3788, -6.8496, -22.2828, -21.5569, 28.7706, 4.3751],
+        [11.2006, 0.7339, 3.73, 3.2058, 151.73, 4.6387],
     ],
     dtype=float,
 )

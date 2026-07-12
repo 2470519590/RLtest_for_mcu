@@ -105,7 +105,17 @@ def write_lqr_history_csv(path: Path, samples: tuple[LqrHistorySample, ...]) -> 
     if not samples:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = list(LqrHistorySample.__dataclass_fields__.keys())
+    fieldnames = (
+        "time_s",
+        "theta",
+        "theta_rate",
+        "x",
+        "x_rate",
+        "pitch",
+        "pitch_rate",
+        "wheel_torque",
+        "pitch_torque",
+    )
     with path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
@@ -121,60 +131,68 @@ def plot_lqr_history(path: Path, samples: tuple[LqrHistorySample, ...]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     time_s = np.array([sample.time_s for sample in samples], dtype=float)
     theta = np.array([sample.theta for sample in samples], dtype=float)
-    pitch = np.array([sample.pitch for sample in samples], dtype=float)
+    theta_rate = np.array([sample.theta_rate for sample in samples], dtype=float)
+    x = np.array([sample.x for sample in samples], dtype=float)
     x_rate = np.array([sample.x_rate for sample in samples], dtype=float)
-    x_velocity_reference = np.array([sample.x_velocity_reference for sample in samples], dtype=float)
-    base_height = np.array([sample.base_height for sample in samples], dtype=float)
+    pitch = np.array([sample.pitch for sample in samples], dtype=float)
+    pitch_rate = np.array([sample.pitch_rate for sample in samples], dtype=float)
     wheel_torque = np.array([sample.wheel_torque for sample in samples], dtype=float)
     pitch_torque = np.array([sample.pitch_torque for sample in samples], dtype=float)
-    max_abs_ctrl = np.array([sample.max_abs_ctrl for sample in samples], dtype=float)
     left_length = np.array([sample.left_length for sample in samples], dtype=float)
     right_length = np.array([sample.right_length for sample in samples], dtype=float)
+    left_length_rate = np.array([sample.left_length_rate for sample in samples], dtype=float)
+    right_length_rate = np.array([sample.right_length_rate for sample in samples], dtype=float)
     left_length_force = np.array([sample.left_length_force for sample in samples], dtype=float)
     right_length_force = np.array([sample.right_length_force for sample in samples], dtype=float)
-    left_branch = np.array([sample.left_branch_violation for sample in samples], dtype=float)
-    right_branch = np.array([sample.right_branch_violation for sample in samples], dtype=float)
-    left_wheel_speed = np.array([sample.left_wheel_speed for sample in samples], dtype=float)
-    right_wheel_speed = np.array([sample.right_wheel_speed for sample in samples], dtype=float)
 
-    figure, axes = plt.subplots(5, 1, figsize=(9, 11), sharex=True)
-    axes[0].plot(time_s, pitch, label="pitch")
+    figure, axes = plt.subplots(8, 1, figsize=(10, 18), sharex=True)
     axes[0].plot(time_s, theta, label="theta")
-    axes[0].set_ylabel("rad")
+    axes[0].plot(time_s, pitch, label="phi")
+    axes[0].set_ylabel("angle (rad)")
     axes[0].legend(loc="best")
     axes[0].grid(True)
 
-    axes[1].plot(time_s, wheel_torque, label="T")
-    axes[1].plot(time_s, pitch_torque, label="Tp")
-    axes[1].set_ylabel("N*m")
+    axes[1].plot(time_s, theta_rate, label="dtheta")
+    axes[1].plot(time_s, pitch_rate, label="dphi")
+    axes[1].set_ylabel("rate (rad/s)")
     axes[1].legend(loc="best")
     axes[1].grid(True)
 
-    axes[2].plot(time_s, max_abs_ctrl, label="max_abs_ctrl")
-    axes[2].set_ylabel("ctrl")
-    axes[2].set_ylim(0.0, max(1.05, float(np.max(max_abs_ctrl)) * 1.05))
+    axes[2].plot(time_s, x, label="x")
+    axes[2].set_ylabel("position (m)")
     axes[2].legend(loc="best")
     axes[2].grid(True)
 
-    axes[3].plot(time_s, x_rate, label="x_rate")
-    axes[3].plot(time_s, x_velocity_reference, label="v_ref")
-    axes[3].plot(time_s, left_wheel_speed, label="left_wheel_speed")
-    axes[3].plot(time_s, right_wheel_speed, label="right_wheel_speed")
-    axes[3].set_ylabel("m/s, rad/s")
+    axes[3].plot(time_s, x_rate, label="dx")
+    axes[3].set_ylabel("velocity (m/s)")
     axes[3].legend(loc="best")
     axes[3].grid(True)
 
-    axes[4].plot(time_s, base_height, label="base_height")
-    axes[4].plot(time_s, left_length, label="left_length")
-    axes[4].plot(time_s, right_length, label="right_length")
-    axes[4].plot(time_s, left_length_force / 250.0, label="left_Fl/250")
-    axes[4].plot(time_s, right_length_force / 250.0, label="right_Fl/250")
-    axes[4].plot(time_s, left_branch, label="left_branch_violation")
-    axes[4].plot(time_s, right_branch, label="right_branch_violation")
-    axes[4].set_ylabel("m")
+    axes[4].plot(time_s, wheel_torque, label="T")
+    axes[4].plot(time_s, pitch_torque, label="Tp")
+    axes[4].set_ylabel("torque (N*m)")
     axes[4].set_xlabel("time (s)")
     axes[4].legend(loc="best")
     axes[4].grid(True)
+
+    axes[5].plot(time_s, left_length_force, label="left F_l")
+    axes[5].plot(time_s, right_length_force, label="right F_l")
+    axes[5].set_ylabel("support (N)")
+    axes[5].legend(loc="best")
+    axes[5].grid(True)
+
+    axes[6].plot(time_s, left_length, label="left L")
+    axes[6].plot(time_s, right_length, label="right L")
+    axes[6].set_ylabel("leg length (m)")
+    axes[6].legend(loc="best")
+    axes[6].grid(True)
+
+    axes[7].plot(time_s, left_length_rate, label="left dL")
+    axes[7].plot(time_s, right_length_rate, label="right dL")
+    axes[7].set_ylabel("leg rate (m/s)")
+    axes[7].set_xlabel("time (s)")
+    axes[7].legend(loc="best")
+    axes[7].grid(True)
 
     figure.tight_layout()
     figure.savefig(path, dpi=160)

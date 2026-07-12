@@ -14,59 +14,71 @@ run_smoke.py --lqr-true-equilibrium
 
 ```text
 MuJoCo state
-  -> 虚拟腿几何 L, theta, dL, dtheta
-  -> LQR 状态 X
-  -> U_aug = U0 - K (X_aug - X0)
-  -> 腿长支撑 F_l = F_l0 + k_l (L0 - L) - d_l dL + delta_F_l
-  -> VMC: tau_leg = J(q)^T [F_l, Tp_side]^T
+  -> 虚拟腿几何 L, theta_world, dL, dtheta_world
+  -> LQR 状态 X = [theta, dtheta, x, dx, phi, dphi]^T
+  -> U = U0 - K * (X - X0)
+  -> 腿长支撑 F_l = F_l0 + k_l * (L0 - L) - d_l * dL
+  -> VMC: tau_leg = J(q)^T * [F_l, Tp_side]^T
   -> wheel torque: tau_left = tau_right = T / 2
   -> actuator ctrl = tau / gear
 ```
 
 当前阶段不使用强化学习、PPO、行为克隆或 residual RL。
 
-## 状态与输入
+## 观察与结论门禁
+
+涉及平衡、摔倒、扰动恢复和前进运动的物理结论，必须以 MuJoCo 可视化中人类观察到的现象为准。程序输出的数据指标只能用于调试，不得单独作为“已经平衡”或“不会摔倒”的结论。
+
+短时 smoke 只证明程序有限运行。若机器人可能在数秒后才摔倒，`200 step` 不能判断平衡；长时行为必须通过可视化观察确认。
+
+参考文章中的轮腿 LQR + VMC 控制策略视为现实已验证可行的目标框架。若本项目不能复现，应优先检查当前实现的符号、尺度、工作点、线性化、VMC 映射和执行路径，而不是否定文章控制框架。
+
+文章或理论推导已给出解析解时，必须优先使用解析公式。数值方法只允许作为解析解附近的局部工作点搜索或诊断对照，不得替代解析 IK、解析 Jacobian 或解析力学关系。
+
+## LQR 状态与输入
 
 LQR 状态：
 
 ```text
-X_aug = [theta, dtheta, x, dx, phi, dphi, L, dL]^T
+X = [theta, dtheta, x, dx, phi, dphi]^T
 ```
 
 定义：
 
 ```text
-theta  = 0.5 * (theta_world_left + theta_world_right) - phi
-dtheta = 0.5 * (dtheta_world_left + dtheta_world_right) - dphi
+theta  = 0.5 * (theta_world_left + theta_world_right)
+dtheta = 0.5 * (dtheta_world_left + dtheta_world_right)
 x      = r_wheel * 0.5 * (q_left_wheel + q_right_wheel) - x_ref
 dx     = r_wheel * 0.5 * (dq_left_wheel + dq_right_wheel) - dx_ref
 phi    = body pitch
 dphi   = body pitch rate
-L      = 0.5 * (L_left + L_right)
-dL     = 0.5 * (dL_left + dL_right)
 ```
 
-`x/dx` 默认来自轮子角度和轮速，不使用 `base_x/base_x_dot` 作为主平衡状态。`base_x` 只作为漂移或打滑诊断量。
+`x/dx` 默认来自轮子角度和轮速，不使用 `base_x/base_x_dot` 作为主平衡状态。`base_x/base_x_dot` 只作为漂移或打滑诊断量。
 
 LQR 输入：
 
 ```text
-U_aug = [T, Tp, delta_F_l]^T
+U = [T, Tp]^T
 ```
 
 含义：
 
 - `T`：左右轮总力矩。
-- `Tp`：虚拟腿角向等效力矩，由左右腿分配执行。
-- `delta_F_l`：整体反馈给两条腿的共同支撑力修正，限幅后叠加到腿长支撑环。
+- `Tp`：每条腿的虚拟腿角向等效力矩；左右腿各执行同一 `Tp`，再叠加反相同步项。
 
-控制律：
+当前默认执行符号：
 
 ```text
-U_aug = U0 - K * (X_aug - X0)
+lqr_wheel_sign = +1
+lqr_pitch_sign = -1
 ```
 
-`X0/U0` 必须来自 true equilibrium，不允许默认写成零点。
+其中 `lqr_pitch_sign = -1` 表示 LQR 第二输入通道的正控制量在运行时按反号送入 VMC 角向力矩通道。当前主路径下若保持 `+1`，可视化会出现车体后倒时虚拟腿反向前摆。
+
+有限差分线性化的输入仿真和工作点 `U0` 必须使用同一执行映射；不得用未乘 `lqr_pitch_sign` 的 `B` 矩阵，配合已乘该符号的运行输出。
+
+腿长 `L/dL` 不进入当前有效 LQR 状态；腿长只由 VMC 支撑环控制。曾经尝试的 `X_aug=[theta,dtheta,x,dx,phi,dphi,L,dL]` 和 `U_aug=[T,Tp,delta_F_l]` 不再作为有效平衡控制器。
 
 ## 虚拟腿几何
 
@@ -77,30 +89,38 @@ p_hip   = 0.5 * (p_front_upper + p_rear_upper)
 p_wheel = p_carrier_site
 r       = p_wheel - p_hip
 L       = sqrt(r_x^2 + r_z^2)
-theta   = atan2(r_x, -r_z)
+theta_world = atan2(r_x, -r_z)
 ```
 
 速度：
 
 ```text
-dL     = (r_x v_x + r_z v_z) / L
-dtheta = (-r_z v_x + r_x v_z) / L^2
+dL           = (r_x v_x + r_z v_z) / L
+dtheta_world = (-r_z v_x + r_x v_z) / L^2
 ```
 
 符号：
 
 ```text
-theta = 0  表示虚拟腿在世界系近似竖直
-theta > 0  表示轮侧参考点在髋部前方
-F_l > 0    初始增大虚拟腿长度
+theta_world = 0  表示虚拟腿在世界系近似竖直
+theta_world > 0  表示轮侧参考点在髋部前方
+F_l > 0          初始增大虚拟腿长度
 ```
+
+在当前 `L0=0.35 m` 接触工作点的短脉冲辨识中，实际 `T>0` 与实际
+`Tp>0` 都使 `theta_world` 初始增大；实际 `Tp>0` 同时使
+`theta_rel = theta_world - phi` 初始减小。故 `theta_rel` 与
+`theta_world` 不能混作同一个 `Tp` 反馈目标。
+
+当前 LQR 按参考文章使用 `theta = theta_world` 与
+`dtheta = dtheta_world`；`phi/dphi` 作为独立的机身世界系姿态状态。
 
 ## 五连杆解析 Jacobian
 
 VMC 主路径使用解析五连杆 Jacobian：
 
 ```text
-J(q) = d[L, theta] / d[q_front, q_rear]
+J(q) = d[L, theta_world] / d[q_front, q_rear]
 ```
 
 关节力矩映射：
@@ -108,6 +128,12 @@ J(q) = d[L, theta] / d[q_front, q_rear]
 ```text
 tau_leg = J(q)^T * [F_l, Tp_side]^T
 ```
+
+在自由机身下，`Tp` 的关节反作用会同时改变车身 pitch。故若目标是让
+虚拟腿相对世界系转动而机身保持近似稳定，`Tp` 不能单独执行，必须由
+轮端 `T` 同步提供反作用补偿；该补偿应与 LQR 的有限差分输入映射一致。
+
+在当前模型的前倾单通道识别中，`T+` 同时使 `theta_world` 增大、`pitch` 减小；`Tp+` 使两者都增大。因此 `T` 是当前世界系腿角/车身 pitch 恢复的主执行通道，`Tp` 只能视为身-腿内部力矩通道，不得在未经广义力学分配推导的情况下作为世界系腿角的主控制量。
 
 禁止把带轮地接触的 rollout 数值差分作为 VMC 主 Jacobian。该差分会把地面接触约束混入纯几何微分，使 `dL/dq` 过小。
 
@@ -127,7 +153,7 @@ J ≈ [
 腿长控制只负责支撑高度：
 
 ```text
-F_l = F_l0 + k_l * (L0 - L) - d_l * dL + delta_F_l
+F_l = F_l0 + k_l * (L0 - L) - d_l * dL
 ```
 
 当前锁定工作点：
@@ -157,46 +183,19 @@ phi 和 theta 为小角度
 
 全局 `x` 不要求为 0，因为平地上存在平移对称性。真正重要的是 `dx≈0` 和姿态/接触稳定。
 
-## 外部扰动测试
+## 左右差模同步
 
-风、碰撞和踢击使用施加到 `base` 的世界系外力脉冲：
-
-```text
-F_ext(t) = [F_x, 0, 0]
-J_ext = integral(F_ext dt)
-```
-
-外力通过 MuJoCo `xfrc_applied` 注入，作用结束后清零。禁止直接修改腿角、腿长或瞬移 freejoint 姿态来代替外部扰动。
-
-当前有效工作点量级：
-
-```text
-X0 ≈ [0, 0, 0.0280, 0.0035, -0.00163, -0.000092]
-U0 ≈ [-0.00136, 0.00213]
-L0_actual ≈ 0.35019 m
-contact_force_per_wheel ≈ 50.77 N
-
-左右平均状态不包含差模。三维双轮模型在 VMC 分配前使用弱同步阻尼：
+当前 LQR 使用左右平均状态，不显式控制左右腿差模。三维双轮模型在 VMC 分配前使用弱同步阻尼：
 
 ```text
 e_diff  = theta_left - theta_right
 de_diff = dtheta_left - dtheta_right
 Tp_sync = -k_sync * e_diff - d_sync * de_diff
-Tp_left  = Tp/2 + Tp_sync
-Tp_right = Tp/2 - Tp_sync
+Tp_left  = Tp + Tp_sync
+Tp_right = Tp - Tp_sync
 ```
 
 该项只抑制左右反相腿角，不改变整体 LQR 的共模 `Tp`。
-
-轮速离开线性小范围时，限幅前加入安全恢复阻尼：
-
-```text
-v_excess = sign(dx) * max(0, abs(dx) - 0.01)
-T_used   = clip(T_LQR - 20 * v_excess, -T_max, T_max)
-```
-
-该项只用于阻止受扰或减速时轮速继续增大，不能替代 LQR 姿态恢复。
-```
 
 ## 正常腿型分支
 
@@ -251,6 +250,6 @@ wheel motor gear = 12
 
 ## 已知限制
 
-- 当前 LQR 使用左右平均 `theta`，没有显式控制左右腿差模。
-- 当前 `--lqr-true-equilibrium` 是本地 smoke 入口，不是最终训练平台。
+- 当前 `--lqr-true-equilibrium` 只是实验入口；是否真正平衡必须看可视化，不能由短时数据门禁判定。
+- 小扰动测试数据只说明某些量在阈值内，不代表视觉上已经恢复，也不代表不会在更长时间后摔倒。
 - 任何新几何、新腿长截面、新状态定义都必须重新走：解析 IK/Jacobian 检查、true equilibrium、线性化、短 smoke、可视化。

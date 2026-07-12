@@ -282,6 +282,15 @@ def _virtual_rod_ik_ctrl(
             if vmc_diagnostics is not None:
                 position_state = _compute_virtual_leg_state(mujoco, model, data, side)
                 vmc_diagnostics[side] = VmcDiagnostics(length_error=target[0] - position_state.length)
+        elif virtual_rod_control == "off":
+            # Wheel-only balance diagnostic: keep this leg's actuator controls
+            # at zero. The upright pose is provided only by initialization.
+            if vmc_diagnostics is not None:
+                passive_state = _compute_virtual_leg_state(mujoco, model, data, side)
+                vmc_diagnostics[side] = VmcDiagnostics(
+                    length_error=target[0] - passive_state.length,
+                    length_rate=passive_state.length_rate,
+                )
         elif virtual_rod_control == "vmc":
             side_memory = None
             if vmc_memory is not None:

@@ -237,8 +237,8 @@ def _run_single_equilibrium_candidate(
         )
         wheel_torque = float(np.clip(raw_wheel_torque, -wheel_torque_limit, wheel_torque_limit))
         raw_pitch_torque = pitch_torque_center - (
-            theta_kp * (state.theta + state.pitch)
-            + theta_kd * (state.theta_rate + state.pitch_rate)
+            theta_kp * state.theta
+            + theta_kd * state.theta_rate
             + pitch_kp * state.pitch
             + pitch_kd * state.pitch_rate
         ) + tp_bias
@@ -268,7 +268,7 @@ def _run_single_equilibrium_candidate(
             0.0,
             max(length_kd, 1.0),
             ik_target_cache,
-            theta_force_offset=(0.5 * pitch_torque + sync_torque, 0.5 * pitch_torque - sync_torque),
+            theta_force_offset=(pitch_torque + sync_torque, pitch_torque - sync_torque),
             length_force_ff=fl0,
             length_ki=0.0,
             length_integral_limit=0.0,

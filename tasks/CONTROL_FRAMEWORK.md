@@ -1,5 +1,11 @@
 # CONTROL_FRAMEWORK.md
 
+> 2026-07-11 更正：主路径恢复文章状态 `X=[theta_world,dtheta_world,x,dx,phi,dphi]`。文章摆杆向量为“轮轴到机体”，代码为“机体到轮轴”，所以 `theta_article=-theta_world`；结合单通道脉冲，文章输入应执行为 `lqr_wheel_sign=+1`、`lqr_pitch_sign=-1`。此前的相对模态坐标及增益硬投影使局部闭环特征值超过 1，已完整撤回。
+
+> 轮端/Tp 通道试验：从 true equilibrium 施加 `phi=+0.04 rad` 后，当前闭环在 0.3 s 内已令轮角由 `-0.330` 变为 `-0.022 rad`、`theta_world` 由 `-0.041` 变为 `-0.003 rad`，证明轮端与 VMC 执行存在且方向可用；同期 `Tp` 初值约 `+1.23`，按文章方程会增大 `phi`，是“只抬头”的直接来源。为先验证轮端倒立摆恢复，当前把 LQR 代价设为 `R=[0.1,10000]`，使 `Tp` 成为近似禁用的辅助输入，后续只在完成受约束分配推导后再恢复其公共平衡职责。
+
+> 输出平滑：前倾局部记录中 `T` 在 25 ms 内由 `+8` 切至 `-1.2`，来源是 `theta/dtheta` 项瞬时换向，不是轮电机覆盖或 `x/dx` 位置回正。启用已有的 `lqr_output_rate_limit=1000 N*m/s`；按当前实现，每个 5 ms 控制周期最多变化 `1 N*m`，限制突发前冲而不改变 LQR、VMC、模型或符号定义。
+
 本文件记录当前轮腿控制框架的大任务进展。后续同类小实验只更新本文件，不再新增零散任务文档。
 
 ## 目标
@@ -100,30 +106,42 @@ experiments/virtual_rod.py          556
 
 ## 验证记录
 
-最近通过：
+最近语法检查通过：
 
 ```powershell
 Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
 & 'E:\miniconda\envs\py310\python.exe' -m py_compile run_smoke.py src\robot_smoke\__init__.py src\robot_smoke\core\__init__.py src\robot_smoke\core\constants.py src\robot_smoke\core\types.py src\robot_smoke\core\mujoco_utils.py src\robot_smoke\model\__init__.py src\robot_smoke\model\actuators.py src\robot_smoke\model\fivebar.py src\robot_smoke\model\kinematics.py src\robot_smoke\model\mechanics.py src\robot_smoke\control\__init__.py src\robot_smoke\control\ik.py src\robot_smoke\control\lqr.py src\robot_smoke\control\lqr_design.py src\robot_smoke\control\vmc.py src\robot_smoke\experiments\__init__.py src\robot_smoke\experiments\equilibrium.py src\robot_smoke\experiments\fivebar_checks.py src\robot_smoke\experiments\fl_tests.py src\robot_smoke\experiments\trace.py src\robot_smoke\experiments\virtual_rod.py src\robot_smoke\io\__init__.py src\robot_smoke\io\cli.py src\robot_smoke\io\output.py src\robot_smoke\model_smoke.py src\robot_smoke\runner.py
 ```
 
-```powershell
-Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
-& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --lqr-true-equilibrium --virtual-rod-steps 200
-```
+旧短时 `--virtual-rod-steps 200` 结果只允许理解为 finite smoke 记录，不能作为平衡证明。该结论已在 2026-07-11 撤销。
 
-结果：
+## 2026-07-11 无扰动 12 秒控制记录
 
-```text
-L0_slices: [0.35]
-qualified=True
-saturated_steps=0
-final_left_branch_violation=0
-final_right_branch_violation=0
-result: PASS finite model/load/step smoke
-```
+- 新增 history 诊断字段：`Tp_left = Tp/2 + Tp_sync`、`Tp_right = Tp/2 - Tp_sync`；它们只记录 VMC 前的左右腿角向输入，不改变控制律。
+- 使用 `--lqr-true-equilibrium --virtual-rod-steps 12000` 采样。可视化判定：约 5 s 的第三次后倒未恢复，6 s 后已经摔倒；5 s 只是本次失稳时刻，不是后续实验的固定诊断上限。`Tp` 自 0.236 s 起长期位于总限幅 ±2 N*m；`T` 自 6.446 s 起首次达到 ±8 N*m。
+- 发现并修复控制离散周期不一致：线性化和 K 使用 `5 ms` 离散步长，而运行时旧代码每 `1 ms` 重算 K。锁定运行控制周期为 5 个物理步（200 Hz），使运行采样与离散模型一致；不改变状态、输入、几何或 VMC 物理语义。
+- 发现线性化输入坐标错误：旧 `B` 和 `U0` 未包含运行时的 `lqr_pitch_sign=-1`，但运行输出包含该符号，导致 K 对应的 `Tp` 方向与真实执行方向相反。现在线性化仿真和 `U0` 使用同一符号映射；不改变 `theta`、`F_l`、Jacobian 或已确认的运行符号。
+- 修复后 12 秒无 viewer rollout 仍未通过，不能宣称已平衡；同时已运行 12 秒 viewer，后续平衡结论必须由该可视化中的实际首次动作确认。注意 viewer 前的默认 800-step smoke 输出不能替代 12 秒可视化结论。
+- 在 true equilibrium 上做 50 ms 单通道脉冲：实际 `T+/-1 N*m` 分别使 `theta_world` 初始变化约 `+/-0.00866 rad`；实际 `Tp+/-0.5 N*m` 分别使 `theta_world` 变化约 `+/-0.00159 rad`，但 `Tp+` 同时使 `theta_rel` 减小、pitch 增大。该事实解释了当前“后倒时腿反而向前”：LQR 对 `theta_rel` 的负反馈与世界系竖直腿目标发生冲突。
+- 用户确认参考文章的 `theta` 是摆杆相对世界竖直方向的角。LQR 状态已改为 `theta_world/dtheta_world`，并同步修改状态扰动与 equilibrium 临时姿态环；`phi/dphi` 仍为独立机身状态，必须重新线性化，不可复用旧 K。
+- 修复 viewer 与 rollout 初态不一致：旧 viewer 从锁机身 IK 姿态启动，而 LQR 从 true equilibrium 启动。viewer 现复制同一 `lqr_operating_data`，并复用左右 `Tp_sync` 分配；可视化才可用于判断当前 K 的实际动作。
+- 世界系状态重线性化后，局部 `T` 脉冲方向正确，但最大闭环特征值约 `0.999549`（5 ms 控制周期），小信号恢复时间常数约 11 s。曾试将 `R_T` 从 `2.0` 降为 `0.1`，主特征值几乎不变且 rollout 仍失败，故已恢复 `R_T=2.0`，不将该试验当作有效修复。
+- 发现 `x/dx` 线性化扰动不满足无滑滚动：旧代码只改 wheel q，不同步平移 free base，导致位置列混入错误接触几何，`K_T,x` 会把后向位移继续放大。现改为每个 `x/dx` 扰动同时平移 base x 并增加对应 wheel q，再重新线性化。
+- 滚动一致 A/B 下，当前 `R_T=2.0` 使 LQR 过度依赖总限幅 ±2 N*m 的 `Tp`，画面表现为机体 pitch 变化而世界系虚拟腿几乎不动。曾以 `R_T=0.1` 做轮端优先试验，但在修复 `Tp` 尺度前不保留该耦合变更，现已恢复 `R_T=2.0`。
+- 按文章输入语义修复 `Tp` 分配：`T` 是总轮力矩，仍按左右各 `T/2`；`Tp` 是每条腿的角向等效力矩，旧代码错误地按 `Tp/2` 分给每条腿。现改为 `Tp_left=Tp+Tp_sync`、`Tp_right=Tp-Tp_sync`，并同步更新 rollout、viewer、equilibrium 和有限差分线性化。
+- 以修复后的 B 矩阵重新分配 LQR 输入代价：`Tp` 对车身 pitch 的局部作用强于对世界系腿角的作用，旧 `R=[2.0,1.2]` 促使控制器优先打满 `Tp`。现试验 `R=[0.1,12.0]`，将轮端 T 设为主恢复通道、Tp 作为昂贵辅助通道。
+- VMC 单通道辨识：锁 base 时每腿 `Tp=+1` 使 `theta_world` 增加约 `0.01379 rad`、pitch 近零；释放 base 时 `theta_world` 仅增加约 `0.00636 rad`，而 pitch 增加约 `0.00918 rad`。因此 VMC `J^T` 映射有效，当前“只转车身”来自 `Tp` 的自由机身反作用未被 T 同步补偿。
+- viewer 显示旧 `Q_theta=Q_phi` 会把 `theta_world` 锁在 0，车身则绕竖直虚拟杆摔倒。现将性能目标改为机身/轮端优先：`Q=[40,8,10,300,2500,250]`，`R=[0.1,100]`。这允许世界系腿角在瞬态偏转，以轮端先追到重心下方；不改变状态或 VMC 语义。
+- 产物：`tasks/lqr-state-trace-2026-07-11.csv`、`tasks/lqr-state-trace-2026-07-11.png`、`tasks/lqr-motor-torque-2026-07-11.png`。
 
 ## 当前问题
+
+- 本轮已定位 VMC 的自由机身反作用：在 true equilibrium 上，每腿 `Tp=+1` 的 50 ms 脉冲在锁定 base 时使 `theta_world` 增加约 `0.013793 rad`；释放 base 时只增加约 `0.006359 rad`，而 pitch 增加约 `0.009176 rad`。几何 Jacobian 映射有效，症状来自 `Tp` 没有由轮端 `T` 同步抵消机身反作用。
+- 尝试过以有限差分 `B` 构造 `Tp -> T` 一阶反作用补偿，但可视化显示它使系统更早原地摔倒。该近似补偿已完整撤销，不作为有效控制策略。后续需将 VMC 的世界系虚拟力矩与机身反作用的广义力学映射分开验证，而不能继续在 `B` 上叠加经验补偿。
+- 前倾单通道脉冲（`phi=+0.06 rad`、30 ms）：相对零输入，`T+` 使 `theta_world` 增大且 `pitch` 减小，是轮端向重心下方移动的正确方向；`Tp+` 使 `theta_world` 增大但同时显著增大 `pitch`。因此当前 VMC 的 `Tp` 是内部身-腿力矩通道，不可作为世界系虚拟腿角的主恢复通道；“只抬头”正是该通道主导时的物理结果。
+- 纠正：之前手工撤回失败 `Tp->T` 补偿时，误把 CLI 的 LQR 代价恢复为旧 `R=[2.0,1.2]`。该设置会使内部 `Tp` 通道比轮端 `T` 更便宜，与“只抬头”相符。现在恢复为该主路径已记录的轮端主导代价：`Q=[40,8,10,300,2500,250]`、`R=[0.1,100]`。
+- 控制顺序已逐行确认：`LQR -> VMC 写入腿电机 ctrl -> T/2 写入轮电机 ctrl -> mj_step`，viewer 与 rollout 一致，轮端不会被 `data.ctrl[:]=0` 覆盖。当前前倾时 `theta_world` 和 `phi` 同时为正：旧 `Qtheta=40,Qphi=2500` 仍使 `theta` 通道过早把轮端往反方向拉回，与 pitch 恢复所需的轮端方向冲突。因此将当前试验代价更新为 `Q=[1,0.5,10,300,2500,250]`，让 `phi/dphi` 主导首段轮端恢复，`theta/dtheta` 只保留弱约束。
+- 独立模态线性化后仍暴露实际因果符号冲突：纯 `phi` 模态下，实测要求 `phi>0 -> T>0`，但未约束的 DARE 给出 `K[T,phi]>0`，即 `U=-KX` 会输出错向的 `T<0`。现对增益施加基于通道职责的结构投影：`T` 不再直接响应身-腿相对模态，且强制 `K[T,phi]<0`；`Tp` 不再直接响应公共 `phi/dphi`。这使 `T` 专责轮端/pitch 恢复，`Tp` 只留给身-腿内部模态。
 
 - 旧小任务文档已归档到 `tasks/archive/`，尚未物理删除。
 - `model_smoke.py` 仍保留 viewer overlay 和部分 smoke 扫描流程；后续可继续拆 `viewer.py`，但不应在整理时改控制公式。
@@ -135,15 +153,17 @@ result: PASS finite model/load/step smoke
 - 默认腿长恢复为 `0.35 m`。
 - equilibrium 新增腿长目标误差和左右腿差模门禁。
 - 0.35 m 工作点：`L_mean=0.350189 m`，`F_l0≈34.5262 N`，无饱和，左右差模接近数值噪声。
-- 扰动测试已改为站稳后向 `base` 施加世界系水平外力，不再直接修改 pitch 或腿状态。
-- 外力测试当前从 `2 N × 0.1 s` 小冲量开始。DARE 上限由 800 提高到 10000，当前约 7475 次收敛；未收敛 K 是此前长期发散的重要原因。
+- 已撤销扰动入口作为当前主路径；恢复无扰动平衡前，不再把 `base` 外力脉冲或速度指令混入默认控制链。
 - LQR 状态 `theta` 已改为相对车体角：`theta_world-phi`，临时 equilibrium 控制仍使用世界腿角。
 - 增加轮速越界恢复阻尼后，外力后的轮速峰值明显下降，但 `Tp` 姿态通道仍会把机体带出线性域并摔倒；`Tp` 暂限 2 N·m，结果仍未通过。
 - runner 现在输出 `behavior_qualified`，摔倒或恢复不合格时返回失败，不再打印伪 PASS。
 - 修正 theta 扰动后重新投影 `x/dx`，`A[x,theta]` 从约 `0.296` 降到约 `2e-5`，确认旧线性化存在状态串扰。
 - NumPy Hamiltonian CARE 也无法让真实零扰动 rollout 稳定，说明当前六状态 A/B 未包含腿长/接触内部动态。后续应扩展线性化状态或严格约束隐藏状态一致，不能继续叠加经验恢复项。
-- 已加入移动位置/速度参考入口 `--target-speed` 和加速度斜坡。
-- 当前非零速度跟踪未通过：即使 `0.005 m/s` 也出现参考误差持续增长。下一步先做 `T` 脉冲和 `x_ref` 小阶跃，确认 wheel state、base `+X` 和 `T` 的局部 DC 增益，不继续放大速度指令。
-- 抗扰结构已增广为 `X_aug=[theta,dtheta,x,dx,phi,dphi,L,dL]`、`U_aug=[T,Tp,delta_F_l]`。双输入增广模型可控秩仅 `6/8`；加入共同支撑力修正并使用 5 ms 辨识窗后，标准 DARE 成功，短时闭环特征值 `max|eig|≈0.999636`。
+- 已撤销移动位置/速度参考入口 `--target-speed`，避免在恢复无扰动版本前引入额外运动指令。
+- 2026-07-11 恢复无扰动正常平衡主路径：撤下增广 `X_aug/U_aug` 作为有效控制器，当前 LQR 回到 `X=[theta,dtheta,x,dx,phi,dphi]`、`U=[T,Tp]`，腿长只由 VMC 的 `F_l0 + k_l(L0-L)-d_l dL` 支撑。
 - viewer 保持 1 ms 控制/物理步，只约每 16 步同步一次画面，目标刷新率约 60 Hz，避免逐步 OpenGL 同步造成慢放。
-- 已删除线性化模型外的经验轮速恢复阻尼。3 秒无扰动测试不再立即倒地，腿长约 `0.3476 m` 且无饱和，但轮速仍持续到约 `-9.25 rad/s`，`behavior_qualified=False`；小外力测试同样未通过。下一步必须做 `theta_rel -> T`、`phi -> T` 小脉冲闭环符号辨识，当前不得宣称抗扰完成。
+- 2026-07-11 纠正：撤销“`200 step` 无扰动通过”和“`1500 step` 小扰动通过”作为平衡结论。实际长时间可视化中仍会腿向反方向摆动、加速翻车；后续不得再用短时数据门禁宣称平衡。
+- 后续涉及平衡、扰动恢复或前进运动时，必须以用户观看 MuJoCo 可视化为准。数据指标只用于定位问题，不能代替物理观察。
+- 下一步控制实现必须严格对齐参考文章的解析控制策略。文章已给解析解或解析公式的部分优先解析实现；仅允许在解析解附近做局部工作点搜索，不允许用大范围数值方法替代。
+- 2026-07-11 手工恢复扰动测试前主路径：删除 CLI/runner/rollout/viewer 中的 `--disturbance`、`--target-speed`、`xfrc_applied` 和移动 `x_ref` 残留；LQR 状态扰动恢复为两个闭链姿态经 `mj_differentiatePos` 求速度，不再手动覆盖五连杆驱动关节速度。
+- 2026-07-11 根据最新可视化现象修正 `Tp` 默认执行方向：当前主路径下 `lqr_pitch_sign` 改为 `-1`。保持 `+1` 时，车体后倒会出现虚拟腿反向前摆，因此先做最小符号恢复，不改 `theta_world`、`F_l` 或状态维度语义。

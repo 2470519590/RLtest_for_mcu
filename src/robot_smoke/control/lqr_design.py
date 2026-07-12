@@ -9,7 +9,6 @@ import numpy as np
 from ..model.actuators import (
     apply_additive_wheel_torque_ctrl as _apply_additive_wheel_torque_ctrl,
     leg_drive_actuator_ids as _leg_drive_actuator_ids,
-    leg_drive_joint_ids as _leg_drive_joint_ids,
     wheel_actuator_ids as _wheel_actuator_ids,
 )
 from ..model.fivebar import compute_leg_branch_metrics as _compute_leg_branch_metrics
@@ -36,7 +35,8 @@ from ..core.mujoco_utils import copy_data as _copy_data
 from ..core.mujoco_utils import id_by_name as _id_by_name
 from ..core.mujoco_utils import lock_base_to_initial as _lock_base_to_initial
 from ..core.types import LqrDesignResult, LqrHistorySample, LqrState, VmcDiagnostics, VmcSideMemory
-from ..control.vmc import _drive_joint_position_ctrl, _drive_virtual_rod_vmc_ctrl, _leg_shape_jacobian
+from ..core.constants import MEASURED_LQR_B_CONTINUOUS
+from ..control.vmc import _drive_joint_position_ctrl, _drive_virtual_rod_vmc_ctrl
 
 def _prepare_lqr_operating_point(
     mujoco,
@@ -190,7 +190,9 @@ def _apply_lqr_state_perturbation(
     operating_state = _compute_lqr_state(mujoco, model, operating_data, 0.0, x_source)
     if x_source == "wheel":
         radius = _wheel_radius(mujoco, model)
-        wheel_q_delta = float(target_state[2] - operating_state.x) / radius
+        x_delta = float(target_state[2] - operating_state.x)
+        data.qpos[0] += x_delta
+        wheel_q_delta = x_delta / radius
         for side in ("left", "right"):
             wheel_joint = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_JOINT, f"{side}_wheel_joint")
             data.qpos[int(model.jnt_qposadr[wheel_joint])] += wheel_q_delta
@@ -199,16 +201,13 @@ def _apply_lqr_state_perturbation(
     _set_base_pitch(data.qpos, float(target_state[4]))
     mujoco.mj_forward(model, data)
     current_state = _compute_lqr_state(mujoco, model, data, 0.0, x_source)
-    if (
-        abs(target_state[0] - current_state.theta) > 1e-12
-        or abs(target_state[6] - current_state.length) > 1e-12
-    ):
+    if abs(target_state[0] - current_state.theta) > 1e-12:
         _apply_lqr_theta_state_perturbation(
             mujoco,
             model,
             data,
-            float(target_state[0] + target_state[4]),
-            float(target_state[6]),
+            float(target_state[0]),
+            0.5 * (left_target[0] + right_target[0]),
             left_target,
             right_target,
             leg_branch,
@@ -218,7 +217,9 @@ def _apply_lqr_state_perturbation(
     if x_source == "wheel":
         radius = _wheel_radius(mujoco, model)
         current_state = _compute_lqr_state(mujoco, model, data, 0.0, x_source)
-        wheel_q_delta = float(target_state[2] - current_state.x) / radius
+        x_delta = float(target_state[2] - current_state.x)
+        data.qpos[0] += x_delta
+        wheel_q_delta = x_delta / radius
         for side in ("left", "right"):
             wheel_joint = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_JOINT, f"{side}_wheel_joint")
             data.qpos[int(model.jnt_qposadr[wheel_joint])] += wheel_q_delta
@@ -233,7 +234,9 @@ def _apply_lqr_state_perturbation(
     _set_base_pitch(future.qpos, future_pitch)
     if x_source == "wheel":
         radius = _wheel_radius(mujoco, model)
-        wheel_q_delta = velocity_dt * float(target_state[3]) / radius
+        x_delta = velocity_dt * float(target_state[3])
+        future.qpos[0] += x_delta
+        wheel_q_delta = x_delta / radius
         for side in ("left", "right"):
             wheel_joint = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_JOINT, f"{side}_wheel_joint")
             future.qpos[int(model.jnt_qposadr[wheel_joint])] += wheel_q_delta
@@ -243,9 +246,8 @@ def _apply_lqr_state_perturbation(
         mujoco,
         model,
         future,
-        float(target_state[0] + target_state[4])
-        + velocity_dt * float(target_state[1] + target_state[5]),
-        float(target_state[6]) + velocity_dt * float(target_state[7]),
+        float(target_state[0]) + velocity_dt * float(target_state[1]),
+        0.5 * (left_target[0] + right_target[0]),
         left_target,
         right_target,
         leg_branch,
@@ -255,9 +257,9 @@ def _apply_lqr_state_perturbation(
     if x_source == "wheel":
         radius = _wheel_radius(mujoco, model)
         current_future_state = _compute_lqr_state(mujoco, model, future, 0.0, x_source)
-        wheel_q_delta = (
-            float(target_state[2] + velocity_dt * target_state[3]) - current_future_state.x
-        ) / radius
+        x_delta = float(target_state[2] + velocity_dt * target_state[3]) - current_future_state.x
+        future.qpos[0] += x_delta
+        wheel_q_delta = x_delta / radius
         for side in ("left", "right"):
             wheel_joint = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_JOINT, f"{side}_wheel_joint")
             future.qpos[int(model.jnt_qposadr[wheel_joint])] += wheel_q_delta
@@ -286,9 +288,11 @@ def _simulate_lqr_dynamics_step(
     virtual_rod_joint_kd: float,
     wheel_torque: float,
     pitch_torque: float,
-    length_force_delta: float,
     design_steps: int,
     x_source: str,
+    wheel_sign: float,
+    pitch_sign: float,
+    leg_control_enabled: bool = True,
 ) -> np.ndarray:
     ik_target_cache: dict[tuple[str, float, float, str, float, int], tuple[float, float]] = {}
     vmc_memory: dict[str, VmcSideMemory] = {}
@@ -299,7 +303,7 @@ def _simulate_lqr_dynamics_step(
             data,
             left_target,
             right_target,
-            "vmc",
+            "vmc" if leg_control_enabled else "off",
             leg_branch,
             ik_search_radius,
             ik_search_samples,
@@ -309,14 +313,14 @@ def _simulate_lqr_dynamics_step(
             0.0,
             virtual_rod_joint_kd,
             ik_target_cache,
-            theta_force_offset=0.5 * pitch_torque,
-            length_force_ff=virtual_rod_length_force_ff + length_force_delta,
+            theta_force_offset=pitch_sign * pitch_torque,
+            length_force_ff=virtual_rod_length_force_ff,
             length_ki=virtual_rod_length_ki,
             length_integral_limit=virtual_rod_length_integral_limit,
             length_force_rate_limit=virtual_rod_length_force_rate_limit,
             vmc_memory=vmc_memory,
         )
-        _apply_additive_wheel_torque_ctrl(mujoco, model, data, wheel_torque)
+        _apply_additive_wheel_torque_ctrl(mujoco, model, data, wheel_sign * wheel_torque)
         mujoco.mj_step(model, data)
     return _lqr_state_vector(_compute_lqr_state(mujoco, model, data, 0.0, x_source))
 
@@ -342,6 +346,9 @@ def _design_lqr_gain(
     input_eps: np.ndarray,
     design_steps: int,
     x_source: str,
+    wheel_sign: float,
+    pitch_sign: float,
+    leg_control_enabled: bool = True,
     operating_data: object | None = None,
     operating_u0: np.ndarray | None = None,
 ) -> LqrDesignResult:
@@ -356,7 +363,7 @@ def _design_lqr_gain(
             ik_search_samples,
         )
     if operating_u0 is None:
-        operating_u0 = np.zeros(3, dtype=float)
+        operating_u0 = np.zeros(2, dtype=float)
     operating_state = _compute_lqr_state(mujoco, model, operating_data, 0.0, x_source)
     operating_point_sample = _collect_static_operating_point_sample(
         mujoco,
@@ -409,12 +416,8 @@ def _design_lqr_gain(
             ik_search_samples,
             x_source,
         )
-        plus_initial = _lqr_state_vector(
-            _compute_lqr_state(mujoco, model, plus_data, 0.0, x_source)
-        )
-        minus_initial = _lqr_state_vector(
-            _compute_lqr_state(mujoco, model, minus_data, 0.0, x_source)
-        )
+        plus_initial = _lqr_state_vector(_compute_lqr_state(mujoco, model, plus_data, 0.0, x_source))
+        minus_initial = _lqr_state_vector(_compute_lqr_state(mujoco, model, minus_data, 0.0, x_source))
         plus = _simulate_lqr_dynamics_step(
             mujoco,
             model,
@@ -433,9 +436,11 @@ def _design_lqr_gain(
             virtual_rod_joint_kd,
             float(operating_u0[0]),
             float(operating_u0[1]),
-            float(operating_u0[2]),
             design_steps,
             x_source,
+            wheel_sign,
+            pitch_sign,
+            leg_control_enabled,
         )
         minus = _simulate_lqr_dynamics_step(
             mujoco,
@@ -455,9 +460,11 @@ def _design_lqr_gain(
             virtual_rod_joint_kd,
             float(operating_u0[0]),
             float(operating_u0[1]),
-            float(operating_u0[2]),
             design_steps,
             x_source,
+            wheel_sign,
+            pitch_sign,
+            leg_control_enabled,
         )
         initial_state_deltas[:, state_index] = 0.5 * (plus_initial - minus_initial)
         next_state_deltas[:, state_index] = 0.5 * (plus - minus)
@@ -491,9 +498,11 @@ def _design_lqr_gain(
             virtual_rod_joint_kd,
             float(operating_u0[0] + delta[0]),
             float(operating_u0[1] + delta[1]),
-            float(operating_u0[2] + delta[2]),
             design_steps,
             x_source,
+            wheel_sign,
+            pitch_sign,
+            leg_control_enabled,
         )
         minus = _simulate_lqr_dynamics_step(
             mujoco,
@@ -513,11 +522,21 @@ def _design_lqr_gain(
             virtual_rod_joint_kd,
             float(operating_u0[0] - delta[0]),
             float(operating_u0[1] - delta[1]),
-            float(operating_u0[2] - delta[2]),
             design_steps,
             x_source,
+            wheel_sign,
+            pitch_sign,
+            leg_control_enabled,
         )
         b_matrix[:, input_index] = (plus - minus) / (2.0 * float(input_eps[input_index]))
+    # Use the measured local physical input map for the controller.  The
+    # finite-difference loop above remains useful for comparison, but its
+    # position rows mix pulse integration with contact dynamics and must not
+    # define the command directions used by LQR.
+    if input_count == 2 and state_count == 6:
+        design_dt = float(model.opt.timestep) * max(1, design_steps)
+        command_sign = np.diag([float(wheel_sign), float(pitch_sign)])
+        b_matrix = MEASURED_LQR_B_CONTINUOUS @ command_sign * design_dt
     baseline_next = _simulate_lqr_dynamics_step(
         mujoco,
         model,
@@ -536,13 +555,16 @@ def _design_lqr_gain(
         virtual_rod_joint_kd,
         float(operating_u0[0]),
         float(operating_u0[1]),
-        float(operating_u0[2]),
         design_steps,
         x_source,
+        wheel_sign,
+        pitch_sign,
+        leg_control_enabled,
     )
+    # `operating_data` and `operating_u0` come from the static-contact search.
+    # Do not algebraically trim U0 here: that would create a new input without
+    # settling the constrained mechanism at the corresponding new state.
     affine_residual = baseline_next - x0
-    input_trim, *_ = np.linalg.lstsq(b_matrix, -affine_residual, rcond=None)
-    operating_u0 = operating_u0 + input_trim
     q_matrix = np.diag(q_diag)
     r_matrix = np.diag(r_diag)
     riccati_iterations = 0
@@ -640,6 +662,8 @@ def _collect_lqr_history_sample(
     step: int,
     wheel_torque: float,
     pitch_torque: float,
+    left_pitch_torque: float,
+    right_pitch_torque: float,
     x_reference: float,
     x_source: str,
     left_target: tuple[float, float],
@@ -676,10 +700,14 @@ def _collect_lqr_history_sample(
         x_velocity_reference=x_velocity_reference,
         wheel_torque=wheel_torque,
         pitch_torque=pitch_torque,
+        left_pitch_torque=left_pitch_torque,
+        right_pitch_torque=right_pitch_torque,
         base_height=float(data.qpos[2]) if model.nq >= 3 else math.nan,
         max_abs_ctrl=float(np.max(np.abs(data.ctrl))),
         left_length=left.length,
         right_length=right.length,
+        left_length_rate=left.length_rate,
+        right_length_rate=right.length_rate,
         left_length_error=left_target[0] - left.length,
         right_length_error=right_target[0] - right.length,
         left_length_force_raw=left_diag.length_force_raw,

@@ -101,8 +101,6 @@ def _run_virtual_rod_test(
     trace_control_csv: Path | None,
     trace_control_plot: Path | None,
     initial_data: object | None = None,
-    disturbance_force_x: float = 0.0,
-    target_speed: float = 0.0,
 ) -> VirtualRodResult:
     if initial_data is not None:
         data = _copy_data(mujoco, model, initial_data)
@@ -149,19 +147,7 @@ def _run_virtual_rod_test(
     trace_previous: ControlTracePrevious | None = None
     trace_stats = ControlTraceStats()
     trace_samples: list[ControlTraceSample] = []
-    moving_x_reference = lqr_x_reference
-    commanded_speed = 0.0
-    base_body_id = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, "base")
-    disturbance_start = min(1000, max(1, steps // 3))
-    disturbance_stop = min(steps, disturbance_start + 100)
     for step in range(steps):
-        data.xfrc_applied[base_body_id, :] = 0.0
-        if disturbance_force_x != 0.0 and disturbance_start <= step < disturbance_stop:
-            data.xfrc_applied[base_body_id, 0] = disturbance_force_x
-        timestep = float(model.opt.timestep)
-        commanded_speed += float(np.clip(target_speed - commanded_speed, -0.1 * timestep, 0.1 * timestep))
-        state_reference_speed = commanded_speed
-        moving_x_reference += state_reference_speed * timestep
         if lock_base:
             _lock_base_to_initial(mujoco, model, data)
         wheel_torque = previous_wheel_torque
@@ -171,7 +157,7 @@ def _run_virtual_rod_test(
                 mujoco,
                 model,
                 data,
-                moving_x_reference,
+                lqr_x_reference,
                 lqr_x_source,
                 lqr_gain_scale,
                 lqr_k,
@@ -183,7 +169,6 @@ def _run_virtual_rod_test(
                 lqr_tp_limit,
                 lqr_x_outer_kp,
                 lqr_x_outer_max_v,
-                state_reference_speed,
             )
             control_dt = float(model.opt.timestep) * lqr_control_period_steps
             wheel_torque = _lowpass_value(
@@ -231,6 +216,8 @@ def _run_virtual_rod_test(
         sync_torque = -LEG_THETA_SYNC_KP * (left_leg.theta - right_leg.theta) - LEG_THETA_SYNC_KD * (
             left_leg.theta_rate - right_leg.theta_rate
         )
+        left_pitch_torque = pitch_torque + sync_torque
+        right_pitch_torque = pitch_torque - sync_torque
         ctrl_abs, saturated, length_error, theta_error = _virtual_rod_ik_ctrl(
             mujoco,
             model,
@@ -247,7 +234,7 @@ def _run_virtual_rod_test(
             effective_theta_kd,
             joint_kd,
             ik_target_cache,
-            theta_force_offset=(0.5 * pitch_torque + sync_torque, 0.5 * pitch_torque - sync_torque),
+            theta_force_offset=(left_pitch_torque, right_pitch_torque),
             length_force_ff=length_force_ff + length_force_delta,
             length_ki=length_ki,
             length_integral_limit=length_integral_limit,
@@ -318,6 +305,8 @@ def _run_virtual_rod_test(
                     step + 1,
                     wheel_torque,
                     pitch_torque,
+                    left_pitch_torque,
+                    right_pitch_torque,
                     lqr_x_reference,
                     lqr_x_source,
                     left_target,
@@ -539,7 +528,7 @@ def _check_lower_loop_constraints(
                 effective_theta_kd,
                 joint_kd,
                 ik_target_cache,
-                theta_force_offset=0.5 * pitch_torque,
+                theta_force_offset=pitch_torque,
                 length_force_ff=motor_length_force_ff + length_force_delta,
                 length_ki=motor_ki,
                 length_integral_limit=motor_length_integral_limit,

@@ -91,10 +91,14 @@ class LqrHistorySample:
     x_velocity_reference: float
     wheel_torque: float
     pitch_torque: float
+    left_pitch_torque: float
+    right_pitch_torque: float
     base_height: float
     max_abs_ctrl: float
     left_length: float
     right_length: float
+    left_length_rate: float
+    right_length_rate: float
     left_length_error: float
     right_length_error: float
     left_length_force_raw: float

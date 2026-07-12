@@ -68,6 +68,7 @@ from .control.lqr_design import (
     _lqr_middle_control,
     _prepare_lqr_operating_point,
 )
+from .core.constants import LEG_THETA_SYNC_KD, LEG_THETA_SYNC_KP
 from .model.kinematics import (
     compute_virtual_leg_shape as _compute_virtual_leg_shape,
     compute_virtual_leg_state as _compute_virtual_leg_state,
@@ -156,51 +157,20 @@ def _set_viewer_status_overlay(
     lqr_output_lowpass_hz: float,
     wheel_ctrl_deadzone: float,
 ) -> None:
-    left_state = _compute_virtual_leg_state(mujoco, model, data, "left")
-    right_state = _compute_virtual_leg_state(mujoco, model, data, "right")
     lqr_state = _compute_lqr_state(mujoco, model, data, 0.0, x_source)
-    left_branch = _compute_leg_branch_metrics(mujoco, model, data, "left")
-    right_branch = _compute_leg_branch_metrics(mujoco, model, data, "right")
-    left_diag = vmc_diagnostics.get("left", VmcDiagnostics())
-    right_diag = vmc_diagnostics.get("right", VmcDiagnostics())
-    operating_sample = lqr_design_result.operating_point_sample if lqr_design_result is not None else None
-    op_left_length = operating_sample.left_length if operating_sample is not None else left_target[0]
-    op_right_length = operating_sample.right_length if operating_sample is not None else right_target[0]
-    op_theta = lqr_design_result.operating_state.theta if lqr_design_result is not None else float(lqr_x0[0])
-    op_x = lqr_design_result.operating_state.x if lqr_design_result is not None else float(lqr_x0[2])
-    op_pitch = lqr_design_result.operating_state.pitch if lqr_design_result is not None else float(lqr_x0[4])
-
     labels = [
-        "step",
-        "LQR op L(avg)",
-        "LQR op theta/x/phi",
-        "L target L/R",
-        "Actual L/R",
-        "Actual theta/x/phi",
-        "Delta(theta,phi)",
-        "Branch vio L/R",
-        "U0(T,Tp)",
-        "U(T,Tp)",
-        "VMC F_l cmd L/R",
-        "VMC F_l raw L/R",
-        "Theta scale L/R",
-        "LPF / deadzone",
+        "step / time",
+        "STATE theta, dtheta",
+        "STATE x, dx",
+        "STATE phi, dphi",
+        "CONTROL T, Tp",
     ]
     values = [
         f"{step:d} ({step * float(model.opt.timestep):.3f}s)",
-        f"{0.5 * (op_left_length + op_right_length):.4f} m",
-        f"{op_theta:.4f}, {op_x:.4f}, {op_pitch:.4f}",
-        f"{left_target[0]:.4f} / {right_target[0]:.4f} m",
-        f"{left_state.length:.4f} / {right_state.length:.4f} m",
-        f"{lqr_state.theta:.4f}, {lqr_state.x:.4f}, {lqr_state.pitch:.4f}",
-        f"{lqr_state.theta - op_theta:+.4f}, {lqr_state.pitch - op_pitch:+.4f}",
-        f"{left_branch.violation:.4f} / {right_branch.violation:.4f}",
-        f"{float(lqr_u0[0]):+.4f}, {float(lqr_u0[1]):+.4f}",
+        f"{lqr_state.theta:+.5f} rad, {lqr_state.theta_rate:+.5f} rad/s",
+        f"{lqr_state.x:+.5f} m, {lqr_state.x_rate:+.5f} m/s",
+        f"{lqr_state.pitch:+.5f} rad, {lqr_state.pitch_rate:+.5f} rad/s",
         f"{wheel_torque:+.4f}, {pitch_torque:+.4f}",
-        f"{left_diag.length_force:+.2f} / {right_diag.length_force:+.2f} N",
-        f"{left_diag.length_force_raw:+.2f} / {right_diag.length_force_raw:+.2f} N",
-        f"{left_diag.theta_force_scale:.3f} / {right_diag.theta_force_scale:.3f}",
-        f"{lqr_output_lowpass_hz:.2f} Hz / {wheel_ctrl_deadzone:.4f}",
     ]
     viewer.set_texts(
         (
@@ -382,16 +352,18 @@ def _visualize_virtual_rod_test(
     lqr_output_rate_limit: float,
     lqr_output_lowpass_hz: float,
     wheel_ctrl_deadzone: float,
-    disturbance_force_x: float,
-    target_speed: float,
+    initial_data: object | None,
     realtime: bool,
 ) -> None:
     import mujoco.viewer  # pylint: disable=import-outside-toplevel
 
-    data = mujoco.MjData(model)
-    mujoco.mj_resetData(model, data)
-    mujoco.mj_forward(model, data)
-    if lqr_test and lqr_auto_design:
+    if initial_data is not None:
+        data = _copy_data(mujoco, model, initial_data)
+    else:
+        data = mujoco.MjData(model)
+        mujoco.mj_resetData(model, data)
+        mujoco.mj_forward(model, data)
+    if initial_data is None and lqr_test and lqr_auto_design:
         data = _prepare_lqr_operating_point(
             mujoco,
             model,
@@ -408,21 +380,10 @@ def _visualize_virtual_rod_test(
     length_force_delta = 0.0
     ik_target_cache: dict[tuple[str, float, float, str, float, int], tuple[float, float]] = {}
     vmc_memory: dict[str, VmcSideMemory] = {}
-    moving_x_reference = lqr_x_reference
-    commanded_speed = 0.0
-    base_body_id = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, "base")
-    disturbance_start = min(1000, max(1, steps // 3))
-    disturbance_stop = min(steps, disturbance_start + 100)
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.sync()
         wall_start = time.perf_counter()
         for step in range(steps):
-            data.xfrc_applied[base_body_id, :] = 0.0
-            if disturbance_force_x != 0.0 and disturbance_start <= step < disturbance_stop:
-                data.xfrc_applied[base_body_id, 0] = disturbance_force_x
-            commanded_speed += float(np.clip(target_speed - commanded_speed, -0.1 * timestep, 0.1 * timestep))
-            state_reference_speed = commanded_speed
-            moving_x_reference += state_reference_speed * timestep
             if lock_base:
                 _lock_base_to_initial(mujoco, model, data)
             wheel_torque = previous_wheel_torque
@@ -432,7 +393,7 @@ def _visualize_virtual_rod_test(
                     mujoco,
                     model,
                     data,
-                    moving_x_reference,
+                    lqr_x_reference,
                     lqr_x_source,
                     lqr_gain_scale,
                     lqr_k,
@@ -444,7 +405,6 @@ def _visualize_virtual_rod_test(
                     lqr_tp_limit,
                     lqr_x_outer_kp,
                     lqr_x_outer_max_v,
-                    state_reference_speed,
                 )
                 control_dt = timestep * lqr_control_period_steps
                 wheel_torque = _lowpass_value(
@@ -482,6 +442,11 @@ def _visualize_virtual_rod_test(
             step_right_target = _apply_theta_pitch_feedforward(right_target, pitch_for_theta_ff, theta_pitch_ff)
             effective_theta_kp = 0.0 if lqr_test else theta_kp
             effective_theta_kd = 0.0 if lqr_test else theta_kd
+            left_leg = _compute_virtual_leg_state(mujoco, model, data, "left")
+            right_leg = _compute_virtual_leg_state(mujoco, model, data, "right")
+            sync_torque = -LEG_THETA_SYNC_KP * (left_leg.theta - right_leg.theta) - LEG_THETA_SYNC_KD * (
+                left_leg.theta_rate - right_leg.theta_rate
+            )
             vmc_diagnostics: dict[str, VmcDiagnostics] = {}
             _virtual_rod_ik_ctrl(
                 mujoco,
@@ -499,7 +464,10 @@ def _visualize_virtual_rod_test(
                 effective_theta_kd,
                 joint_kd,
                 ik_target_cache,
-                theta_force_offset=0.5 * pitch_torque,
+                theta_force_offset=(
+                    pitch_torque + sync_torque,
+                    pitch_torque - sync_torque,
+                ),
                 length_force_ff=length_force_ff + length_force_delta,
                 length_ki=length_ki,
                 length_integral_limit=length_integral_limit,

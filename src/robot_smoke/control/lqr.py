@@ -6,21 +6,23 @@ import math
 
 import numpy as np
 
-from ..core.constants import LQR_LENGTH_FORCE_DELTA_LIMIT
 from ..model.kinematics import (
     compute_virtual_leg_state as _compute_virtual_leg_state,
     wheel_positions as _wheel_positions,
+    wheel_center_positions as _wheel_center_positions,
     wheel_radius as _wheel_radius,
-    wheel_speeds as _wheel_speeds,
+    wheel_center_speeds as _wheel_center_speeds,
 )
 from ..core.types import LqrState
 
 
 def base_pitch_from_qpos(qpos: np.ndarray) -> float:
     w, x, y, z = (float(value) for value in qpos[3:7])
+    # Use atan2 so the body angle remains observable after crossing +/-90 deg.
+    # asin would clamp a falling body to +/-pi/2 and hide the actual attitude.
     sin_pitch = 2.0 * (w * y - z * x)
-    sin_pitch = max(-1.0, min(1.0, sin_pitch))
-    return math.asin(sin_pitch)
+    cos_pitch = 1.0 - 2.0 * (x * x + y * y)
+    return math.atan2(sin_pitch, cos_pitch)
 
 
 def lqr_state_from_measurements(
@@ -42,10 +44,10 @@ def lqr_state_from_measurements(
     x_reference_rate: float = 0.0,
 ) -> LqrState:
     if x_source == "wheel":
-        left_wheel_q, right_wheel_q = wheel_positions
+        left_wheel_x, right_wheel_x = wheel_positions
         left_wheel_v, right_wheel_v = wheel_speeds
-        x_value = wheel_radius * 0.5 * (left_wheel_q + right_wheel_q) - x_reference
-        x_rate = wheel_radius * 0.5 * (left_wheel_v + right_wheel_v) - x_reference_rate
+        x_value = 0.5 * (left_wheel_x + right_wheel_x) - x_reference
+        x_rate = 0.5 * (left_wheel_v + right_wheel_v) - x_reference_rate
     elif x_source == "base":
         x_value = float(qpos[0]) - x_reference
         x_rate = float(qvel[0]) - x_reference_rate
@@ -54,8 +56,8 @@ def lqr_state_from_measurements(
     pitch = base_pitch_from_qpos(qpos)
     pitch_rate = float(qvel[4]) if len(qvel) > 4 else 0.0
     return LqrState(
-        theta=0.5 * (left_theta + right_theta) - pitch,
-        theta_rate=0.5 * (left_theta_rate + right_theta_rate) - pitch_rate,
+        theta=0.5 * (left_theta + right_theta),
+        theta_rate=0.5 * (left_theta_rate + right_theta_rate),
         x=x_value,
         x_rate=x_rate,
         pitch=pitch,
@@ -74,8 +76,6 @@ def lqr_state_vector(state: LqrState) -> np.ndarray:
             state.x_rate,
             state.pitch,
             state.pitch_rate,
-            state.length,
-            state.length_rate,
         ],
         dtype=float,
     )
@@ -91,8 +91,8 @@ def compute_lqr_state(
         left.theta_rate,
         right.theta,
         right.theta_rate,
-        _wheel_positions(mujoco, model, data),
-        _wheel_speeds(mujoco, model, data),
+        _wheel_center_positions(mujoco, model, data),
+        _wheel_center_speeds(mujoco, model, data),
         _wheel_radius(mujoco, model),
         left.length,
         left.length_rate,
@@ -214,15 +214,11 @@ def lqr_middle_control_from_state(
             inner_x_rate_error,
             state.pitch,
             state.pitch_rate,
-            state.length,
-            state.length_rate,
         ],
         dtype=float,
     )
     control = lqr_u0 - gain_scale * (lqr_k @ (state_vector - lqr_x0))
     wheel_torque = wheel_sign * float(np.clip(control[0], -lqr_t_limit, lqr_t_limit))
     virtual_pitch_torque = pitch_sign * float(np.clip(control[1], -lqr_tp_limit, lqr_tp_limit))
-    length_force_delta = float(
-        np.clip(control[2], -LQR_LENGTH_FORCE_DELTA_LIMIT, LQR_LENGTH_FORCE_DELTA_LIMIT)
-    )
+    length_force_delta = 0.0
     return wheel_torque, virtual_pitch_torque, length_force_delta, x_velocity_reference

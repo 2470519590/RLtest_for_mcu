@@ -46,11 +46,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use the locked 0.35 m true-equilibrium operating point for auto LQR",
     )
+    parser.add_argument(
+        "--wheel-balance-only",
+        action="store_true",
+        help="diagnostic mode: disable all leg actuator control and Tp; keep wheel T only",
+    )
     parser.add_argument("--history-csv", type=Path)
     parser.add_argument("--history-plot", type=Path)
     parser.add_argument("--motor-torque-plot", type=Path)
-    parser.add_argument("--disturbance", choices=("none", "small", "medium"), default="none")
-    parser.add_argument("--target-speed", type=float, default=0.0, help="wheel-ground forward speed reference in m/s")
     parser.add_argument("--diagnostics-only", action="store_true")
     parser.add_argument("--no-realtime", action="store_true")
 
@@ -95,14 +98,16 @@ def build_parser() -> argparse.ArgumentParser:
         lqr_test=False,
         lqr_gain_scale=None,
         lqr_k=None,
-        lqr_x0=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.35, 0.0),
-        lqr_u0=(0.0, 0.0, 0.0),
+        lqr_x0=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        lqr_u0=(0.0, 0.0),
         lqr_auto_design=False,
         lqr_use_equilibrium_operating_point=False,
-        lqr_q_diag=(700.0, 50.0, 10.0, 300.0, 700.0, 60.0, 400.0, 80.0),
-        lqr_r_diag=(2.0, 1.2, 0.08),
-        lqr_state_eps=(0.012, 0.25, 0.01, 0.2, 0.012, 0.25, 0.003, 0.05),
-        lqr_input_eps=(0.5, 0.5, 5.0),
+        lqr_q_diag=(1.0, 0.5, 10.0, 30.0, 25.0, 25.0),
+        # Tp is an internal body-leg torque.  In a free-base contact model it
+        # must not replace wheel torque as the primary inverted-pendulum input.
+        lqr_r_diag=(0.1, 10.0),
+        lqr_state_eps=(0.012, 0.25, 0.01, 0.2, 0.012, 0.25),
+        lqr_input_eps=(0.5, 0.5),
         lqr_design_steps=None,
         lqr_control_period_steps=None,
         lqr_x_reference=0.0,
@@ -110,10 +115,10 @@ def build_parser() -> argparse.ArgumentParser:
         lqr_x_outer_kp=0.0,
         lqr_x_outer_max_v=0.35,
         lqr_wheel_sign=1.0,
-        lqr_pitch_sign=1.0,
+        lqr_pitch_sign=-1.0,
         lqr_t_limit=16.0,
         lqr_tp_limit=2.0,
-        lqr_output_rate_limit=0.0,
+        lqr_output_rate_limit=1000.0,
         lqr_output_lowpass_hz=0.0,
         wheel_ctrl_deadzone=0.0,
         history_sample_interval=5,

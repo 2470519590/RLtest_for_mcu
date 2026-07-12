@@ -58,6 +58,30 @@ def wheel_speeds(mujoco, model, data) -> tuple[float, float]:
     return float(data.qvel[left_dof]), float(data.qvel[right_dof])
 
 
+def wheel_center_positions(mujoco, model, data) -> tuple[float, float]:
+    """World-frame x positions of the two driven-wheel centers."""
+    left_id = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, "left_wheel")
+    right_id = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, "right_wheel")
+    return float(data.xpos[left_id, 0]), float(data.xpos[right_id, 0])
+
+
+def wheel_center_speeds(mujoco, model, data) -> tuple[float, float]:
+    """World-frame x velocities of the driven-wheel centers.
+
+    This is the inertial wheel measurement used by the balance state.  It is
+    obtained from each wheel body's translational Jacobian, not base qvel and
+    not the wheel hinge's relative qvel.
+    """
+    speeds = []
+    for body_name in ("left_wheel", "right_wheel"):
+        body_id = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        jacp = np.zeros((3, model.nv))
+        jacr = np.zeros((3, model.nv))
+        mujoco.mj_jacBody(model, data, jacp, jacr, body_id)
+        speeds.append(float((jacp @ data.qvel)[0]))
+    return tuple(speeds)
+
+
 def wheel_positions(mujoco, model, data) -> tuple[float, float]:
     left_joint = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_JOINT, "left_wheel_joint")
     right_joint = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_JOINT, "right_wheel_joint")
