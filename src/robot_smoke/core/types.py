@@ -122,6 +122,8 @@ class LqrHistorySample:
     max_abs_ctrl: float
     left_length: float
     right_length: float
+    left_length_reference: float
+    right_length_reference: float
     left_length_rate: float
     right_length_rate: float
     left_length_error: float
@@ -132,6 +134,22 @@ class LqrHistorySample:
     right_length_force: float
     left_length_integral: float
     right_length_integral: float
+    left_branch_guard_error: float
+    right_branch_guard_error: float
+    left_guard_tau_front: float
+    left_guard_tau_rear: float
+    right_guard_tau_front: float
+    right_guard_tau_rear: float
+    left_theta_tau_front: float
+    left_theta_tau_rear: float
+    right_theta_tau_front: float
+    right_theta_tau_rear: float
+    roll: float
+    roll_reference: float
+    roll_length_geometric_offset: float
+    roll_force: float
+    left_length_force_ff: float
+    right_length_force_ff: float
     left_theta_force_scale: float
     right_theta_force_scale: float
     left_front_tau: float
@@ -170,8 +188,13 @@ class VmcDiagnostics:
     theta_force_raw: float = 0.0
     theta_force: float = 0.0
     theta_force_scale: float = 1.0
+    branch_guard_error: float = 0.0
     support_tau_front: float = 0.0
     support_tau_rear: float = 0.0
+    guard_tau_front: float = 0.0
+    guard_tau_rear: float = 0.0
+    theta_tau_front: float = 0.0
+    theta_tau_rear: float = 0.0
     joint_tau_front_raw: float = 0.0
     joint_tau_rear_raw: float = 0.0
     joint_tau_front: float = 0.0

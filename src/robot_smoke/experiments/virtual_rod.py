@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 import numpy as np
 
@@ -29,7 +30,13 @@ from ..control.ik import _virtual_rod_ik_ctrl
 from ..model.mechanics import _collect_static_operating_point_sample
 from ..model.mechanics import apply_base_impact as _apply_base_impact
 from ..control.trajectory import trapezoid_speed_reference as _trapezoid_speed_reference
+from ..control.roll import base_roll_angle as _base_roll_angle
+from ..control.roll import clamp_leg_length as _clamp_leg_length
+from ..control.roll import roll_leg_length_targets as _roll_leg_length_targets
+from ..control.length_schedule import LengthSchedule
+from ..control.whole_body import compose_whole_body_command as _compose_whole_body_command
 from ..control.turning import split_wheel_torque as _split_wheel_torque
+from ..control.turning import turn_rate_magnitude as _turn_rate_magnitude
 from ..control.turning import turn_rate_reference as _turn_rate_reference
 from ..control.turning import yaw_turn_torque as _yaw_turn_torque
 from ..core.mujoco_utils import assert_finite as _assert_finite
@@ -47,16 +54,69 @@ from ..core.types import (
     VmcDiagnostics,
     VmcSideMemory,
 )
-from ..core.constants import (
-    LEG_THETA_SYNC_KD,
-    LEG_THETA_SYNC_KP,
-    LEG_SYNC_DERIVATIVE_LOWPASS_HZ,
-    LEG_SYNC_ERROR_LOWPASS_HZ,
-    LEG_SYNC_INPUT_LOWPASS_HZ,
-    YAW_TURN_INPUT_LOWPASS_HZ,
-    YAW_TURN_ERROR_LOWPASS_HZ,
-    YAW_TURN_DERIVATIVE_LOWPASS_HZ,
-)
+from ..core.config import RuntimeControlConfig
+
+
+def _leg_height_test_target(
+    target: tuple[float, float],
+    time_s: float,
+    enabled: bool,
+    levels: tuple[float, float, float],
+) -> tuple[float, float]:
+    """Return the scheduled length while preserving the target theta."""
+    if not enabled or time_s < 1.0:
+        return target
+    level_index = min(2, int((time_s - 1.0) // 3.0))
+    return levels[level_index], target[1]
+
+
+def _leg_length_sine_target(
+    target: tuple[float, float],
+    time_s: float,
+    enabled: bool,
+    minimum_leg_length: float,
+    maximum_leg_length: float,
+    period_s: float,
+) -> tuple[float, float]:
+    """Return a full-range sinusoidal length target while preserving theta."""
+    if not enabled:
+        return target
+    if period_s <= 0.0:
+        raise ValueError("leg_length_sine_period must be positive")
+    mid_length = 0.5 * (minimum_leg_length + maximum_leg_length)
+    amplitude = 0.5 * (maximum_leg_length - minimum_leg_length)
+    if amplitude <= 0.0:
+        return mid_length, target[1]
+    initial_ratio = float(np.clip((target[0] - mid_length) / amplitude, -1.0, 1.0))
+    phase = math.asin(initial_ratio)
+    length = mid_length + amplitude * math.sin(2.0 * math.pi * time_s / period_s + phase)
+    return length, target[1]
+
+
+def _synchronized_turn_rate_reference(turn_speed: str, time_s: float, duration_s: float) -> float:
+    """High-rate turn reference that starts and ends with the dynamic length test."""
+    duration_s = max(float(duration_s), 0.0)
+    if duration_s <= 0.0:
+        return 0.0
+    time_s = float(np.clip(time_s, 0.0, duration_s))
+    magnitude = _turn_rate_magnitude(turn_speed)
+    ramp_time = min(0.15, 0.5 * duration_s)
+    if ramp_time <= 0.0:
+        return magnitude
+    if time_s < ramp_time:
+        return magnitude * time_s / ramp_time
+    if time_s > duration_s - ramp_time:
+        return magnitude * max(duration_s - time_s, 0.0) / ramp_time
+    return magnitude
+
+
+def _startup_length_target(target: tuple[float, float], time_s: float, ramp_seconds: float) -> tuple[float, float]:
+    if ramp_seconds <= 0.0:
+        return target
+    start_length = 0.35
+    ratio = float(np.clip(time_s / ramp_seconds, 0.0, 1.0))
+    return start_length + ratio * (target[0] - start_length), target[1]
+
 
 def _run_virtual_rod_test(
     mujoco,
@@ -104,11 +164,24 @@ def _run_virtual_rod_test(
     turn_direction: str | None = None,
     turn_speed: str = "high",
     turn_test: bool = False,
-    leg_sync_kp: float = LEG_THETA_SYNC_KP,
-    leg_sync_kd: float = LEG_THETA_SYNC_KD,
+    leg_sync_kp: float = 30.0,
+    leg_sync_kd: float = 20.0,
     yaw_turn_kp: float = 1.8,
     yaw_turn_kd: float = 0.0,
+    leg_height_test: bool = False,
+    leg_height_levels: tuple[float, float, float] = (0.16, 0.23, 0.30),
+    leg_length_sine_test: bool = False,
+    leg_length_sine_period: float = 1,
+    branch_guard_enabled: bool = True,
+    minimum_leg_length: float = 0.16,
+    maximum_leg_length: float = 0.30,
+    length_schedule: LengthSchedule | None = None,
+    startup_ramp_seconds: float = 1.0,
+    runtime_controls: RuntimeControlConfig | None = None,
+    on_initialized: Callable[[object], Callable[[object, int], bool] | None] | None = None,
 ) -> VirtualRodResult:
+    if runtime_controls is None:
+        raise ValueError("runtime_controls must be provided by the YAML-backed runner")
     if initial_data is not None:
         data = _copy_data(mujoco, model, initial_data)
     else:
@@ -127,6 +200,10 @@ def _run_virtual_rod_test(
         )
     if lock_base:
         _lock_base_to_initial(mujoco, model, data)
+    left_wheel_body = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, "left_wheel")
+    right_wheel_body = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, "right_wheel")
+    track_width = abs(float(data.xpos[left_wheel_body, 1] - data.xpos[right_wheel_body, 1]))
+    step_observer = on_initialized(data) if on_initialized is not None else None
 
     max_abs_ctrl = 0.0
     max_length_error = 0.0
@@ -173,16 +250,33 @@ def _run_virtual_rod_test(
     vmc_memory: dict[str, VmcSideMemory] = {}
     vmc_diagnostics: dict[str, VmcDiagnostics] = {}
     odometry = SimulatedOdometry()
+    executed_steps = 0
+    startup_steps = int(math.ceil(startup_ramp_seconds / float(model.opt.timestep))) if startup_ramp_seconds > 0.0 else 0
+    task_duration_s = max(0.0, steps * float(model.opt.timestep) - startup_ramp_seconds)
     for step in range(steps):
-        _apply_base_impact(mujoco, model, data, impact_level, step)
+        active_impact = impact_level if step >= startup_steps else None
+        _apply_base_impact(mujoco, model, data, active_impact, max(0, step - startup_steps))
         _update_simulated_odometry(mujoco, model, data, odometry)
         if lock_base:
             _lock_base_to_initial(mujoco, model, data)
         wheel_torque = previous_wheel_torque
         pitch_torque = previous_pitch_torque
+        active_lqr_k = lqr_k
+        active_lqr_x0 = lqr_x0
+        active_lqr_u0 = lqr_u0
+        active_length_force_ff = length_force_ff
+        if length_schedule is not None:
+            left_schedule_leg = _compute_virtual_leg_state(mujoco, model, data, "left")
+            right_schedule_leg = _compute_virtual_leg_state(mujoco, model, data, "right")
+            scheduled = length_schedule.evaluate(0.5 * (left_schedule_leg.length + right_schedule_leg.length))
+            active_lqr_k = scheduled.lqr_k
+            active_lqr_x0 = scheduled.lqr_x0
+            active_lqr_u0 = scheduled.lqr_u0
+            active_length_force_ff = scheduled.force_ff
         if lqr_test and step % lqr_control_period_steps == 0:
             time_s = step * float(model.opt.timestep)
-            _, x_reference_rate = _trapezoid_speed_reference(speed_profile, time_s)
+            task_time_s = max(0.0, time_s - startup_ramp_seconds)
+            _, x_reference_rate = _trapezoid_speed_reference(speed_profile, task_time_s)
             wheel_torque, pitch_torque, length_force_delta, final_lqr_state, x_velocity_reference = _lqr_middle_control(
                 mujoco,
                 model,
@@ -190,9 +284,9 @@ def _run_virtual_rod_test(
                 lqr_x_reference,
                 lqr_x_source,
                 lqr_gain_scale,
-                lqr_k,
-                lqr_x0,
-                lqr_u0,
+                active_lqr_k,
+                active_lqr_x0,
+                active_lqr_u0,
                 lqr_wheel_sign,
                 lqr_pitch_sign,
                 lqr_t_limit,
@@ -234,19 +328,23 @@ def _run_virtual_rod_test(
                 )
             previous_wheel_torque = wheel_torque
             previous_pitch_torque = pitch_torque
-            yaw_rate_reference = _turn_rate_reference(turn_direction, turn_speed, turn_test, time_s)
+            yaw_rate_reference = (
+                _synchronized_turn_rate_reference(turn_speed, task_time_s, task_duration_s)
+                if leg_length_sine_test
+                else _turn_rate_reference(turn_direction, turn_speed, turn_test, task_time_s)
+            )
             raw_yaw_rate = float(data.qvel[5])
             filtered_yaw_rate = _lowpass_value(
                 raw_yaw_rate,
                 filtered_yaw_rate,
-                YAW_TURN_INPUT_LOWPASS_HZ,
+                runtime_controls.yaw_turn_input_lowpass_hz,
                 control_dt,
             )
             raw_yaw_error = yaw_rate_reference - filtered_yaw_rate
             filtered_yaw_error = _lowpass_value(
                 raw_yaw_error,
                 filtered_yaw_error,
-                YAW_TURN_ERROR_LOWPASS_HZ,
+                runtime_controls.yaw_turn_error_lowpass_hz,
                 control_dt,
             )
             if previous_yaw_error == 0.0 and step == 0:
@@ -258,7 +356,7 @@ def _run_virtual_rod_test(
                 yaw_error_rate = _lowpass_value(
                     raw_yaw_error_rate,
                     filtered_yaw_error_rate,
-                    YAW_TURN_DERIVATIVE_LOWPASS_HZ,
+                    runtime_controls.yaw_turn_derivative_lowpass_hz,
                     control_dt,
                 )
                 filtered_yaw_error_rate = yaw_error_rate
@@ -282,31 +380,72 @@ def _run_virtual_rod_test(
             max_abs_lqr_wheel_torque = max(max_abs_lqr_wheel_torque, abs(wheel_torque))
             max_abs_lqr_pitch_torque = max(max_abs_lqr_pitch_torque, abs(pitch_torque))
         pitch_for_theta_ff = final_lqr_state.pitch if final_lqr_state is not None else _base_pitch_from_qpos(data.qpos)
-        step_left_target = _apply_theta_pitch_feedforward(left_target, pitch_for_theta_ff, theta_pitch_ff)
-        step_right_target = _apply_theta_pitch_feedforward(right_target, pitch_for_theta_ff, theta_pitch_ff)
+        time_s = step * float(model.opt.timestep)
+        task_time_s = max(0.0, time_s - startup_ramp_seconds)
+        scheduled_left_target = _startup_length_target(left_target, time_s, startup_ramp_seconds)
+        scheduled_right_target = _startup_length_target(right_target, time_s, startup_ramp_seconds)
+        scheduled_left_target = _leg_height_test_target(scheduled_left_target, task_time_s, leg_height_test, leg_height_levels)
+        scheduled_right_target = _leg_height_test_target(scheduled_right_target, task_time_s, leg_height_test, leg_height_levels)
+        scheduled_left_target = _leg_length_sine_target(
+            scheduled_left_target,
+            task_time_s,
+            leg_length_sine_test,
+            minimum_leg_length,
+            maximum_leg_length,
+            leg_length_sine_period,
+        )
+        scheduled_right_target = _leg_length_sine_target(
+            scheduled_right_target,
+            task_time_s,
+            leg_length_sine_test,
+            minimum_leg_length,
+            maximum_leg_length,
+            leg_length_sine_period,
+        )
+        scheduled_left_target = (
+            _clamp_leg_length(scheduled_left_target[0], minimum_leg_length, maximum_leg_length),
+            scheduled_left_target[1],
+        )
+        scheduled_right_target = (
+            _clamp_leg_length(scheduled_right_target[0], minimum_leg_length, maximum_leg_length),
+            scheduled_right_target[1],
+        )
+        step_left_target = _apply_theta_pitch_feedforward(scheduled_left_target, pitch_for_theta_ff, theta_pitch_ff)
+        step_right_target = _apply_theta_pitch_feedforward(scheduled_right_target, pitch_for_theta_ff, theta_pitch_ff)
+        roll_targets = _roll_leg_length_targets(
+            step_left_target[0],
+            step_right_target[0],
+            _base_roll_angle(data.qpos),
+            runtime_controls.roll_reference,
+            track_width,
+            runtime_controls.roll_force_kp,
+            minimum_leg_length,
+            maximum_leg_length,
+        )
+        step_left_target = (roll_targets.left_length, step_left_target[1])
+        step_right_target = (roll_targets.right_length, step_right_target[1])
         effective_theta_kp = 0.0 if lqr_test else theta_kp
         effective_theta_kd = 0.0 if lqr_test else theta_kd
-        side_length_force_ff = (length_force_ff + length_force_delta,) * 2
         left_leg = _compute_virtual_leg_state(mujoco, model, data, "left")
         right_leg = _compute_virtual_leg_state(mujoco, model, data, "right")
         raw_sync_error = right_leg.theta - left_leg.theta
         filtered_left_theta = _lowpass_value(
             left_leg.theta,
             filtered_left_theta,
-            LEG_SYNC_INPUT_LOWPASS_HZ,
+            runtime_controls.leg_sync_input_lowpass_hz,
             float(model.opt.timestep),
         )
         filtered_right_theta = _lowpass_value(
             right_leg.theta,
             filtered_right_theta,
-            LEG_SYNC_INPUT_LOWPASS_HZ,
+            runtime_controls.leg_sync_input_lowpass_hz,
             float(model.opt.timestep),
         )
         filtered_sync_input_error = filtered_right_theta - filtered_left_theta
         sync_error = _lowpass_value(
             filtered_sync_input_error,
             filtered_sync_error,
-            LEG_SYNC_ERROR_LOWPASS_HZ,
+            runtime_controls.leg_sync_error_lowpass_hz,
             float(model.opt.timestep),
         )
         filtered_sync_error = sync_error
@@ -314,15 +453,26 @@ def _run_virtual_rod_test(
         sync_error_rate = _lowpass_value(
             raw_sync_error_rate,
             filtered_sync_error_rate,
-            LEG_SYNC_DERIVATIVE_LOWPASS_HZ,
+            runtime_controls.leg_sync_derivative_lowpass_hz,
             float(model.opt.timestep),
         )
         filtered_sync_error_rate = sync_error_rate
         sync_p_torque = leg_sync_kp * sync_error
         sync_d_torque = leg_sync_kd * sync_error_rate
         sync_torque = sync_p_torque + sync_d_torque
-        left_pitch_torque = pitch_torque + sync_torque
-        right_pitch_torque = pitch_torque - sync_torque
+        whole_body = _compose_whole_body_command(
+            wheel_torque,
+            pitch_torque,
+            sync_torque,
+            active_length_force_ff + length_force_delta,
+            roll_targets.force,
+        )
+        side_length_force_ff = (
+            whole_body.left_length_force_bias,
+            whole_body.right_length_force_bias,
+        )
+        left_pitch_torque = whole_body.left_pitch_torque
+        right_pitch_torque = whole_body.right_pitch_torque
         ctrl_abs, saturated, length_error, theta_error = _virtual_rod_ik_ctrl(
             mujoco,
             model,
@@ -344,6 +494,7 @@ def _run_virtual_rod_test(
             length_ki=length_ki,
             length_integral_limit=length_integral_limit,
             length_force_rate_limit=length_force_rate_limit,
+            branch_guard_enabled=branch_guard_enabled,
             vmc_memory=vmc_memory,
             vmc_diagnostics=vmc_diagnostics,
         )
@@ -378,6 +529,7 @@ def _run_virtual_rod_test(
             if abs(float(data.ctrl[actuator_id]) - high) < 1e-12:
                 positive_saturated_steps[actuator_id] += 1
         mujoco.mj_step(model, data)
+        executed_steps = step + 1
         _assert_finite("qpos", data.qpos)
         _assert_finite("qvel", data.qvel)
         left_wheel_speed, right_wheel_speed = _wheel_speeds(mujoco, model, data)
@@ -392,8 +544,8 @@ def _run_virtual_rod_test(
                     step + 1,
                     wheel_torque,
                     pitch_torque,
-                    left_pitch_torque,
-                    right_pitch_torque,
+                    whole_body.left_pitch_torque,
+                    whole_body.right_pitch_torque,
                     yaw_rate_reference,
                     raw_yaw_rate,
                     filtered_yaw_rate,
@@ -412,13 +564,19 @@ def _run_virtual_rod_test(
                     sync_torque,
                     lqr_x_reference,
                     lqr_x_source,
-                    left_target,
-                    right_target,
+                    step_left_target,
+                    step_right_target,
                     vmc_diagnostics,
                     x_velocity_reference,
                     odometry,
+                    runtime_controls.roll_reference,
+                    roll_targets.geometric_offset,
+                    roll_targets.force,
+                    side_length_force_ff,
                 )
             )
+        if step_observer is not None and not step_observer(data, executed_steps):
+            break
 
     if lock_base:
         _lock_base_to_initial(mujoco, model, data)
@@ -449,7 +607,7 @@ def _run_virtual_rod_test(
         for actuator_id in range(model.nu)
     )
     return VirtualRodResult(
-        steps=steps,
+        steps=executed_steps,
         lock_base=lock_base,
         left_target_length=left_target[0],
         left_target_theta=left_target[1],

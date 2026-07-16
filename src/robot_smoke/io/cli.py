@@ -15,7 +15,6 @@ from ..core.constants import (
     LOCKED_EQUILIBRIUM_FL0,
     LOCKED_EQUILIBRIUM_FL0_SCALE,
     LOCKED_EQUILIBRIUM_L0,
-    LOCKED_EQUILIBRIUM_LENGTH_KD,
     LOCKED_EQUILIBRIUM_LENGTH_KP,
     LOCKED_EQUILIBRIUM_PITCH_KD,
     LOCKED_EQUILIBRIUM_PITCH_KP,
@@ -35,6 +34,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--visualize", action="store_true")
     parser.add_argument("--visualize-seconds", type=float)
     parser.add_argument("--virtual-rod-steps", type=int, default=800)
+    parser.add_argument(
+        "--length-schedule",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="enable/disable length-scheduled K/F_l0 table",
+    )
+    parser.add_argument("--length-schedule-path", type=Path)
+    parser.add_argument("--initial-leg-length", type=float, help="initial commanded leg length for scheduled tests")
+    parser.add_argument("--startup-ramp-seconds", type=float, help="seconds reserved for initial leg-length ramp")
     parser.add_argument(
         "--leg-length",
         type=float,
@@ -63,8 +71,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--turn", dest="turn_direction", choices=("left", "right"))
     parser.add_argument("--turn-speed", choices=("low", "medium", "high"), default="high")
     parser.add_argument("--turn-test", action="store_true")
+    parser.add_argument("--turn-length-sine-test", action="store_true", help="高速原地旋转，同时腿长在允许范围内做正弦跟踪")
     parser.add_argument("--turn-drive-test", choices=("low", "high"))
+    parser.add_argument("--roll-test", action="store_true", help="中速依次通过左、右单轮三角坡")
     parser.add_argument("--turn-pd-plot", action="store_true")
+    parser.add_argument("--roll-length-plot", action="store_true")
+    parser.add_argument("--lqr-debug-plot", action="store_true")
+    parser.add_argument(
+        "--leg-height-test",
+        action="store_true",
+        help="平衡模式下按低/中/高三档切换腿长目标，不重新搜索工作点",
+    )
+    parser.add_argument("--length-kd", type=float, help="覆盖腿长微分增益")
+    parser.add_argument("--length-ki", type=float, help="覆盖腿长积分增益")
+    parser.add_argument("--length-integral-limit", type=float, help="覆盖腿长积分状态限幅")
+    parser.add_argument("--length-force-ff", type=float, help="覆盖每腿沿虚拟腿前馈支撑力，单位 N")
     parser.add_argument("--yaw-turn-kp", type=float)
     parser.add_argument("--yaw-turn-kd", type=float)
     parser.add_argument("--leg-sync-kp", type=float)
@@ -98,11 +119,11 @@ def build_parser() -> argparse.ArgumentParser:
         motor_servo_kp=None,
         motor_servo_kd=None,
         virtual_rod_length_kp=LOCKED_EQUILIBRIUM_LENGTH_KP,
-        virtual_rod_length_kd=LOCKED_EQUILIBRIUM_LENGTH_KD,
+        virtual_rod_length_kd=0.0,
         virtual_rod_length_ki=0.0,
         virtual_rod_length_force_ff=LOCKED_EQUILIBRIUM_FL0,
         virtual_rod_gravity_comp_scale=None,
-        virtual_rod_length_integral_limit=0.0,
+        virtual_rod_length_integral_limit=0.10,
         virtual_rod_length_force_rate_limit=0.0,
         virtual_rod_theta_kp=50.0,
         virtual_rod_theta_kd=10.0,
@@ -135,7 +156,15 @@ def build_parser() -> argparse.ArgumentParser:
         lqr_output_lowpass_hz=0.0,
         wheel_ctrl_deadzone=0.0,
         history_sample_interval=5,
+        length_schedule=True,
+        length_schedule_path=Path("config") / "length_schedule.yaml",
+        minimum_leg_length=0.16,
+        maximum_leg_length=0.30,
+        initial_leg_length=None,
+        startup_ramp_seconds=0.0,
         turn_pd_plot_path=None,
+        roll_length_plot_path=None,
+        lqr_debug_plot_path=None,
         fl_channel_test=False,
         fl_channel_forces=(-100.0, -50.0, 0.0, 50.0, 100.0, 150.0),
         fl_channel_steps=1500,
@@ -161,7 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
         equilibrium_steps=LOCKED_EQUILIBRIUM_STEPS,
         equilibrium_eval_steps=LOCKED_EQUILIBRIUM_EVAL_STEPS,
         equilibrium_length_kp=LOCKED_EQUILIBRIUM_LENGTH_KP,
-        equilibrium_length_kd=LOCKED_EQUILIBRIUM_LENGTH_KD,
+        equilibrium_length_kd=0.0,
         equilibrium_theta_kp=LOCKED_EQUILIBRIUM_THETA_KP,
         equilibrium_theta_kd=LOCKED_EQUILIBRIUM_THETA_KD,
         equilibrium_pitch_kp=LOCKED_EQUILIBRIUM_PITCH_KP,
@@ -176,11 +205,20 @@ def build_parser() -> argparse.ArgumentParser:
         speed_profile=None,
         turn_direction=None,
         turn_test=False,
+        turn_length_sine_test=False,
         turn_drive_test=None,
+        leg_length_sine_test=False,
+        leg_length_sine_period=1.5,
+        roll_test=False,
         turn_pd_plot=False,
+        lqr_debug_plot=False,
         yaw_turn_kp=None,
         yaw_turn_kd=None,
         leg_sync_kp=None,
         leg_sync_kd=None,
+        length_kd=None,
+        length_ki=None,
+        length_integral_limit=None,
+        length_force_ff=None,
     )
     return parser

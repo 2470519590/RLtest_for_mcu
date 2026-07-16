@@ -88,3 +88,134 @@ def plot_turning_history(
     figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
     figure.savefig(path, dpi=160)
     plt.close(figure)
+
+
+def plot_roll_length_history(
+    path: Path,
+    samples: tuple[LqrHistorySample, ...],
+    length_kp: float,
+    length_ki: float,
+    length_kd: float,
+    roll_force_kp: float,
+) -> None:
+    """Plot every measured and commanded quantity in the article 2.2 loop."""
+    if not samples:
+        return
+    import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    time_s = np.array([sample.time_s for sample in samples], dtype=float)
+    left_length_ref = _series(samples, "left_length_reference", np.ones(len(samples), dtype=bool))
+    right_length_ref = _series(samples, "right_length_reference", np.ones(len(samples), dtype=bool))
+    left_length = _series(samples, "left_length", np.ones(len(samples), dtype=bool))
+    right_length = _series(samples, "right_length", np.ones(len(samples), dtype=bool))
+    left_length_rate = _series(samples, "left_length_rate", np.ones(len(samples), dtype=bool))
+    right_length_rate = _series(samples, "right_length_rate", np.ones(len(samples), dtype=bool))
+    roll = _series(samples, "roll", np.ones(len(samples), dtype=bool))
+    roll_ref = _series(samples, "roll_reference", np.ones(len(samples), dtype=bool))
+    left_theta_deg = np.degrees(_series(samples, "left_theta", np.ones(len(samples), dtype=bool)))
+    right_theta_deg = np.degrees(_series(samples, "right_theta", np.ones(len(samples), dtype=bool)))
+    left_output = _series(samples, "left_length_force", np.ones(len(samples), dtype=bool))
+    right_output = _series(samples, "right_length_force", np.ones(len(samples), dtype=bool))
+    left_force_bias = _series(samples, "left_length_force_ff", np.ones(len(samples), dtype=bool))
+    right_force_bias = _series(samples, "right_length_force_ff", np.ones(len(samples), dtype=bool))
+    roll_force = _series(samples, "roll_force", np.ones(len(samples), dtype=bool))
+
+    figure, axes = plt.subplots(5, 1, figsize=(11, 13), sharex=True)
+    axes[0].plot(time_s, left_length_ref, "--", label="left L_d")
+    axes[0].plot(time_s, left_length, label="left L")
+    axes[0].plot(time_s, right_length_ref, "--", label="right L_d")
+    axes[0].plot(time_s, right_length, label="right L")
+    axes[0].set_ylabel("m")
+    axes[1].plot(time_s, left_length_rate, label="left dL")
+    axes[1].plot(time_s, right_length_rate, label="right dL")
+    axes[1].set_ylabel("m/s")
+    axes[2].plot(time_s, roll_ref, "--", label="roll reference")
+    axes[2].plot(time_s, roll, label="roll")
+    axes[2].set_ylabel("rad")
+    axes[3].plot(time_s, left_theta_deg, label="left theta")
+    axes[3].plot(time_s, right_theta_deg, label="right theta")
+    axes[3].axhline(0.0, color="black", linestyle="--", linewidth=1.0, label="theta reference = 0 deg")
+    axes[3].set_ylabel("deg")
+    axes[4].plot(time_s, left_output, linewidth=1.5, label="left F_l output")
+    axes[4].plot(time_s, right_output, linewidth=1.5, label="right F_l output")
+    axes[4].plot(time_s, left_force_bias, "--", label="left F_base + F_roll")
+    axes[4].plot(time_s, right_force_bias, "--", label="right F_base - F_roll")
+    axes[4].plot(time_s, roll_force, ":", label="F_roll")
+    axes[4].set_ylabel("N")
+    axes[4].set_xlabel("time (s)")
+    for axis in axes:
+        axis.legend(loc="upper right")
+        axis.grid(True)
+    figure.suptitle(
+        "Article 2.2 leg length and roll control | "
+        f"Kp,L={length_kp:g}, Ki,L={length_ki:g}, Kd,L={length_kd:g}, "
+        f"K_gamma={roll_force_kp:g} N/rad"
+    )
+    figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+    figure.savefig(path, dpi=160)
+    plt.close(figure)
+
+
+def plot_lqr_debug_history(
+    path: Path,
+    samples: tuple[LqrHistorySample, ...],
+    *,
+    title: str,
+) -> None:
+    """Plot the middle-layer balance quantities needed for LQR diagnosis."""
+    if not samples:
+        return
+    import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mask = np.ones(len(samples), dtype=bool)
+    time_s = np.array([sample.time_s for sample in samples], dtype=float)
+    theta = _series(samples, "theta", mask)
+    pitch = _series(samples, "pitch", mask)
+    x_rate = _series(samples, "x_rate", mask)
+    x_velocity_reference = _series(samples, "x_velocity_reference", mask)
+    wheel_torque = _series(samples, "wheel_torque", mask)
+    pitch_torque = _series(samples, "pitch_torque", mask)
+    left_pitch_torque = _series(samples, "left_pitch_torque", mask)
+    right_pitch_torque = _series(samples, "right_pitch_torque", mask)
+    left_length = _series(samples, "left_length", mask)
+    right_length = _series(samples, "right_length", mask)
+    left_length_ref = _series(samples, "left_length_reference", mask)
+    right_length_ref = _series(samples, "right_length_reference", mask)
+
+    figure, axes = plt.subplots(6, 1, figsize=(12, 15), sharex=True)
+    axes[0].plot(time_s, x_velocity_reference, "--", label="dx_ref")
+    axes[0].plot(time_s, x_rate, label="dx")
+    axes[0].set_ylabel("m/s")
+
+    axes[1].plot(time_s, np.degrees(pitch), label="pitch")
+    axes[1].axhline(0.0, color="black", linestyle="--", linewidth=1.0)
+    axes[1].set_ylabel("deg")
+
+    axes[2].plot(time_s, np.degrees(theta), label="theta")
+    axes[2].axhline(0.0, color="black", linestyle="--", linewidth=1.0)
+    axes[2].set_ylabel("deg")
+
+    axes[3].plot(time_s, wheel_torque, label="T wheel")
+    axes[3].set_ylabel("N m")
+
+    axes[4].plot(time_s, pitch_torque, label="Tp LQR")
+    axes[4].plot(time_s, left_pitch_torque, "--", label="Tp left")
+    axes[4].plot(time_s, right_pitch_torque, "--", label="Tp right")
+    axes[4].set_ylabel("N m")
+
+    axes[5].plot(time_s, left_length_ref, "--", label="left L_ref")
+    axes[5].plot(time_s, left_length, label="left L")
+    axes[5].plot(time_s, right_length_ref, "--", label="right L_ref")
+    axes[5].plot(time_s, right_length, label="right L")
+    axes[5].set_ylabel("m")
+    axes[5].set_xlabel("time (s)")
+
+    for axis in axes:
+        axis.legend(loc="upper right")
+        axis.grid(True)
+    figure.suptitle(title)
+    figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+    figure.savefig(path, dpi=160)
+    plt.close(figure)

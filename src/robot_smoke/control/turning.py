@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..core.constants import YAW_TURN_KD, YAW_TURN_KP
-
 TURN_RATE_MAGNITUDES = {
     "low": np.pi * 0.5,
     "medium": np.pi,
-    "high": np.pi * 2.0,
+    "high": 10.0,
 }
 
 
@@ -51,8 +49,8 @@ def yaw_turn_torque(
     yaw_rate: float,
     previous_error: float,
     dt: float,
-    kp: float = YAW_TURN_KP,
-    kd: float = YAW_TURN_KD,
+    kp: float = 3.0,
+    kd: float = 0.1,
     error_rate: float | None = None,
     error: float | None = None,
 ) -> tuple[float, float]:

@@ -39,7 +39,7 @@ Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
 
 ## 当前测试接口
 
-所有物理行为以 MuJoCo viewer 人工观察为准。以下命令均使用固定 `L0=0.35 m` 的 true-equilibrium 入口。
+所有物理行为以 MuJoCo viewer 人工观察为准。当前 `--lqr-true-equilibrium` 已恢复为固定 `L0=0.35 m` 的 locked 平衡入口，不自动重算多腿长工作点。
 
 启动平衡测试：
 
@@ -64,7 +64,14 @@ Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
 & 'E:\miniconda\envs\py310\python.exe' run_smoke.py --turn-test --turn-speed high --visualize --visualize-seconds 6
 ```
 
-转向档位为 `low=pi/2`、`medium=pi`、`high=2*pi rad/s`。`--turn left|right --turn-speed <档位>` 保留为连续手动转向接口。
+Enhanced leg-length turn test:
+```powershell
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --turn-length-sine-test --visualize --visualize-seconds 10 --roll-length-plot
+```
+
+This runs high-rate in-place turning while the leg-length reference follows a 1.5 s sine over `minimum_leg_length..maximum_leg_length`.
+
+转向档位为 `low=pi/2`、`medium=pi`、`high=10 rad/s`。`--turn left|right --turn-speed <档位>` 保留为连续手动转向接口。
 
 旋转前进测试：
 
@@ -87,6 +94,24 @@ Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
 ```powershell
 --turn-pd-plot
 ```
+
+文章 2.2 双腿长度与 roll 控制的诊断图：
+
+```powershell
+Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --turn-drive-test low --visualize-seconds 10 --roll-length-plot
+```
+
+图输出到 `output\HHMMSS.png`，包含左右 `L_d/L/dL`、roll、几何高度差、直接横滚补偿 `F_roll`、左右 `F_base +/- F_roll` 和最终沿腿推力。
+
+单轮三角坡 roll 测试：
+
+```powershell
+Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --roll-test --roll-length-plot --visualize --visualize-seconds 10
+```
+
+该测试按 `config/smoke.yaml` 的 `roll_reference` 与 `roll_force_kp` 运行，并以中速前进；左轮依次通过 `x=2.5 m` 的加宽三角坡和 `x=4.5 m` 的 `0.18 m` 高梯形坡，随后右轮通过 `x=6.7 m` 的同规格梯形坡。坡体只在 `--roll-test` 时显示并参与碰撞。
 
 如果只是实验脚本，不需要引入完整工程化流程。
 

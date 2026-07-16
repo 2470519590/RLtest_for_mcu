@@ -35,7 +35,6 @@ from ..core.mujoco_utils import copy_data as _copy_data
 from ..core.mujoco_utils import lock_base_to_qpos as _lock_base_to_qpos
 from ..core.mujoco_utils import rms as _rms
 from ..core.types import EquilibriumSearchResult, VmcDiagnostics, VmcSideMemory
-from ..core.constants import LEG_THETA_SYNC_KD, LEG_THETA_SYNC_KP
 from ..control.vmc import _drive_constant_length_force_ctrl, _drive_joint_position_ctrl
 
 def _initialize_equilibrium_data(
@@ -249,7 +248,7 @@ def _run_single_equilibrium_candidate(
             Tp_sat_count += 1
         left_leg = _compute_virtual_leg_state(mujoco, model, data, "left")
         right_leg = _compute_virtual_leg_state(mujoco, model, data, "right")
-        sync_torque = LEG_THETA_SYNC_KP * (right_leg.theta - left_leg.theta) + LEG_THETA_SYNC_KD * (
+        sync_torque = 30.0 * (right_leg.theta - left_leg.theta) + 20.0 * (
             right_leg.theta_rate - left_leg.theta_rate
         )
         _, saturated, _, _ = _virtual_rod_ik_ctrl(

@@ -1,0 +1,119 @@
+# Local MuJoCo smoke configuration. CLI values take priority.
+# Units: m, s, rad, N, N*m unless noted.
+# LQR state order: [theta, dtheta, x_b, dx_b, pitch, d_pitch].
+# LQR input order: [T, Tp], where T is common wheel torque and Tp is virtual-leg pitch torque.
+
+# Runtime and operating-point selection.
+# leg_length: nominal target length used by default commands.
+# minimum_leg_length/maximum_leg_length: hard bounds applied to commanded leg references.
+# initial_leg_length: startup target; tests ramp from the old nominal posture to this length.
+# startup_ramp_seconds: extra seconds prepended to virtual-rod/LQR tests for the initial leg-length ramp.
+# length_schedule/path: interpolated table for F_l0, X0, U0 and K versus actual common leg length.
+# virtual_rod_control: VMC lower-loop mode; normal tests use "vmc".
+# leg_branch and ik_search_*: branch-aware IK fallback settings; normal branch is the validated five-bar posture.
+leg_length: 0.24
+minimum_leg_length: 0.16
+maximum_leg_length: 0.30
+initial_leg_length: 0.24
+startup_ramp_seconds: 0.0
+length_schedule: true
+length_schedule_path: config/length_schedule.yaml
+visualize_seconds: null
+virtual_rod_steps: 800
+virtual_rod_control: vmc
+leg_branch: normal
+ik_search_radius: 0.25
+ik_search_samples: 5
+
+# Static-contact/equilibrium diagnostic search parameters.
+# These are diagnostic inputs only. The normal LQR path uses length_schedule.yaml instead of running search.
+# equilibrium_l_slices/theta_refs/fl0_scales: scanned frozen length, vertical theta reference and support-force scale.
+# equilibrium_*_kp/kd: temporary search controller gains, not the main LQR controller.
+# equilibrium_wheel_com_kps/dampings: temporary wheel controller that keeps the wheel under the COM during search.
+equilibrium_search: false
+equilibrium_l_slices: [0.16, 0.20, 0.24, 0.28, 0.30]
+equilibrium_theta_refs: [0.0]
+equilibrium_fl0_scales: [0.68]
+equilibrium_init_modes: [upright-ik]
+equilibrium_steps: 5000
+equilibrium_eval_steps: 2000
+equilibrium_length_kp: 400.0
+equilibrium_length_kd: 0.0
+equilibrium_theta_kp: 3.0
+equilibrium_theta_kd: 2.0
+equilibrium_pitch_kp: 3.0
+equilibrium_pitch_kd: 2.0
+equilibrium_tp_biases: [0.0]
+equilibrium_wheel_com_kps: [80.0]
+equilibrium_wheel_dampings: [0.5]
+equilibrium_init_drop_steps: 0
+
+# Leg length PID plus support feedforward.
+# Formula per leg:
+#   F_l = F_l0 + Kp*(L_ref - L) + Ki*integral(L_ref - L) - Kd*dL
+# virtual_rod_length_force_ff is the manual fallback F_l0; when length_schedule is enabled,
+# the scheduled F_l0 from config/length_schedule.yaml overrides it during LQR tests.
+# virtual_rod_length_force_rate_limit is N/s; 0 disables rate limiting.
+# leg_branch_guard_enabled enables joint-space protection near bad five-bar branches.
+virtual_rod_length_kp: 200.0
+virtual_rod_length_kd: 50.0
+virtual_rod_length_ki: 120.0
+virtual_rod_length_integral_limit: 1000000.0
+virtual_rod_length_force_ff: 34.5
+virtual_rod_length_force_rate_limit: 0.0
+leg_branch_guard_enabled: false
+
+# VMC and whole-body balance.
+# VMC mapping:
+#   tau_joint = J(q)^T [F_l, Tp_side]^T
+# virtual_rod_theta_* are weak lower-loop/diagnostic terms; main balance uses LQR Tp.
+# lqr_t_limit/lqr_tp_limit: saturation before wheel split and before VMC side allocation.
+# lqr_output_rate_limit: N*m/s output slew limit; 0 disables.
+# lqr_output_lowpass_hz: shared LQR output LPF cutoff; 0 disables.
+# lqr_q_diag/r_diag: LQR cost diagonals in the state/input order listed at the top of this file.
+# lqr_x_outer_*: optional outer x-position-to-speed loop; current speed-profile tests mainly track dx.
+# lqr_wheel_sign/lqr_pitch_sign: actuator convention signs; do not change without a sign test.
+virtual_rod_theta_kp: 50.0
+virtual_rod_theta_kd: 10.0
+virtual_rod_joint_kd: 8.0
+virtual_rod_theta_pitch_ff: 0.0
+lqr_gain_scale: 1.0
+lqr_t_limit: 16.0
+lqr_tp_limit: 2.0
+lqr_output_rate_limit: 1000.0
+lqr_output_lowpass_hz: 0.0
+lqr_control_period_steps: null
+lqr_q_diag: [1.0, 1.0, 50.0, 100.0, 5000.0, 10.0]  # theta, dtheta, x_b, dx_b, pitch, d_pitch
+lqr_r_diag: [1.0, 0.25]                            # T wheel, Tp
+lqr_x_outer_kp: 0.0
+lqr_x_outer_max_v: 0.35
+lqr_wheel_sign: 1.0
+lqr_pitch_sign: -1.0
+
+# Turning and leg synchronization.
+# yaw_turn_* controls differential wheel torque for yaw-rate tracking.
+# leg_sync_* controls left/right virtual-leg angle difference through opposite Tp offsets.
+# input_lowpass filters raw measured signal, error_lowpass filters PD error, derivative_lowpass filters D input.
+leg_sync_input_lowpass_hz: 500.0
+leg_sync_error_lowpass_hz: 10.0
+leg_sync_derivative_lowpass_hz: 10.0
+yaw_turn_input_lowpass_hz: 500.0
+yaw_turn_error_lowpass_hz: 10.0
+yaw_turn_derivative_lowpass_hz: 10.0
+leg_sync_kp: 30.0
+leg_sync_kd: 20.0
+yaw_turn_kp: 3.0
+yaw_turn_kd: 0.1
+
+# Roll and leg-height step test.
+# roll_reference: desired body roll angle. Normal flat-ground tests keep this at 0.
+# roll_force_kp: K_gamma in article-style roll compensation,
+#   F_left = F_base + K_gamma*(roll_reference - roll),
+#   F_right = F_base - K_gamma*(roll_reference - roll).
+# leg_height_levels: diagnostic step-test length targets, not normal gait commands.
+# history_sample_interval: record one plotted/debug history sample every N MuJoCo steps.
+roll_reference: 0.0
+roll_force_kp: 300.0
+leg_height_test: false
+leg_height_levels: [0.16, 0.23, 0.30]
+history_sample_interval: 5

@@ -1,4 +1,4 @@
-﻿"""MuJoCo model and low-level actuator smoke checks.
+"""MuJoCo model and low-level actuator smoke checks.
 
 This module verifies that the model loads, exposes the expected low-level
 semantics, and remains finite under small local smoke controllers.
@@ -28,7 +28,6 @@ from .core.constants import (
     LOCKED_EQUILIBRIUM_FL0,
     LOCKED_EQUILIBRIUM_FL0_SCALE,
     LOCKED_EQUILIBRIUM_L0,
-    LOCKED_EQUILIBRIUM_LENGTH_KD,
     LOCKED_EQUILIBRIUM_LENGTH_KP,
     LOCKED_EQUILIBRIUM_PITCH_KD,
     LOCKED_EQUILIBRIUM_PITCH_KP,
@@ -43,6 +42,7 @@ from .core.constants import (
     LOCKED_LQR_DESIGN_STEPS,
     PROJECT_ROOT,
 )
+from .core.config import RuntimeControlConfig
 from .io.cli import build_parser
 from .model.fivebar import (
     analytic_fivebar_kinematics_from_q as _analytic_fivebar_kinematics_from_q,
@@ -69,19 +69,12 @@ from .control.lqr_design import (
     _prepare_lqr_operating_point,
 )
 from .control.trajectory import trapezoid_speed_reference as _trapezoid_speed_reference
+from .control.roll import base_roll_angle as _base_roll_angle
+from .control.roll import roll_leg_length_targets as _roll_leg_length_targets
+from .control.whole_body import compose_whole_body_command as _compose_whole_body_command
 from .control.turning import split_wheel_torque as _split_wheel_torque
 from .control.turning import turn_rate_reference as _turn_rate_reference
 from .control.turning import yaw_turn_torque as _yaw_turn_torque
-from .core.constants import (
-    LEG_THETA_SYNC_KD,
-    LEG_THETA_SYNC_KP,
-    LEG_SYNC_DERIVATIVE_LOWPASS_HZ,
-    LEG_SYNC_ERROR_LOWPASS_HZ,
-    LEG_SYNC_INPUT_LOWPASS_HZ,
-    YAW_TURN_INPUT_LOWPASS_HZ,
-    YAW_TURN_ERROR_LOWPASS_HZ,
-    YAW_TURN_DERIVATIVE_LOWPASS_HZ,
-)
 from .model.kinematics import (
     compute_virtual_leg_shape as _compute_virtual_leg_shape,
     compute_virtual_leg_state as _compute_virtual_leg_state,
@@ -142,66 +135,6 @@ from .core.types import (
     VmcDiagnostics,
     VmcSideMemory,
 )
-
-
-def _set_viewer_status_overlay(
-    viewer,
-    mujoco,
-    model,
-    data,
-    step: int,
-    wheel_torque: float,
-    pitch_torque: float,
-    yaw_rate_reference: float,
-    turn_torque: float,
-    left_wheel_torque: float,
-    right_wheel_torque: float,
-    sync_torque: float,
-    left_target: tuple[float, float],
-    right_target: tuple[float, float],
-    lqr_x0: np.ndarray,
-    lqr_u0: np.ndarray,
-    lqr_design_result: LqrDesignResult | None,
-    x_source: str,
-    vmc_diagnostics: dict[str, VmcDiagnostics],
-    lqr_output_lowpass_hz: float,
-    wheel_ctrl_deadzone: float,
-) -> None:
-    lqr_state = _compute_lqr_state(mujoco, model, data, 0.0, x_source)
-    left_leg = _compute_virtual_leg_state(mujoco, model, data, "left")
-    right_leg = _compute_virtual_leg_state(mujoco, model, data, "right")
-    labels = [
-        "step / time",
-        "STATE theta, dtheta",
-        "STATE x, dx",
-        "STATE phi, dphi",
-        "STATE yaw rate",
-        "CONTROL T, Tp",
-        "CONTROL yaw ref, turn torque",
-        "CONTROL left/right wheel torque",
-        "CONTROL theta_right-left, Tp_sync",
-        "CONTROL F_left/right",
-    ]
-    values = [
-        f"{step:d} ({step * float(model.opt.timestep):.3f}s)",
-        f"{lqr_state.theta:+.5f} rad, {lqr_state.theta_rate:+.5f} rad/s",
-        f"{lqr_state.x:+.5f} m, {lqr_state.x_rate:+.5f} m/s",
-        f"{lqr_state.pitch:+.5f} rad, {lqr_state.pitch_rate:+.5f} rad/s",
-        f"{float(data.qvel[5]):+.5f} rad/s",
-        f"{wheel_torque:+.4f}, {pitch_torque:+.4f}",
-        f"{yaw_rate_reference:+.4f}, {turn_torque:+.4f}",
-        f"{left_wheel_torque:+.4f}, {right_wheel_torque:+.4f}",
-        f"{right_leg.theta - left_leg.theta:+.4f}, {sync_torque:+.4f}",
-        f"{vmc_diagnostics.get('left', VmcDiagnostics()).length_force:+.4f}, {vmc_diagnostics.get('right', VmcDiagnostics()).length_force:+.4f}",
-    ]
-    viewer.set_texts(
-        (
-            mujoco.mjtFontScale.mjFONTSCALE_150,
-            mujoco.mjtGridPos.mjGRID_TOPLEFT,
-            "\n".join(labels),
-            "\n".join(values),
-        )
-    )
 
 
 def _probe_actuators(mujoco, model, steps: int, ctrl_value: float) -> list[ActuatorProbe]:
@@ -324,309 +257,6 @@ def _visualize_pd_hold(mujoco, model, steps: int, kp: float, kd: float, realtime
             _assert_finite("qvel", data.qvel)
             render_due = (step + 1) % render_interval_steps == 0 or step + 1 == steps
             if render_due:
-                viewer.sync()
-                if realtime:
-                    target_wall_time = (step + 1) * timestep
-                    delay = target_wall_time - (time.perf_counter() - wall_start)
-                    if delay > 0.0:
-                        time.sleep(delay)
-            if not viewer.is_running():
-                break
-
-
-def _visualize_virtual_rod_test(
-    mujoco,
-    model,
-    steps: int,
-    lock_base: bool,
-    left_target: tuple[float, float],
-    right_target: tuple[float, float],
-    virtual_rod_control: str,
-    leg_branch: str,
-    ik_search_radius: float,
-    ik_search_samples: int,
-    length_kp: float,
-    length_kd: float,
-    length_ki: float,
-    length_force_ff: float,
-    length_integral_limit: float,
-    length_force_rate_limit: float,
-    theta_kp: float,
-    theta_kd: float,
-    joint_kd: float,
-    theta_pitch_ff: float,
-    lqr_test: bool,
-    lqr_gain_scale: float,
-    lqr_k: np.ndarray,
-    lqr_x0: np.ndarray,
-    lqr_u0: np.ndarray,
-    lqr_design_result: LqrDesignResult | None,
-    lqr_auto_design: bool,
-    lqr_control_period_steps: int,
-    lqr_x_reference: float,
-    lqr_x_source: str,
-    lqr_x_outer_kp: float,
-    lqr_x_outer_max_v: float,
-    lqr_wheel_sign: float,
-    lqr_pitch_sign: float,
-    lqr_t_limit: float,
-    lqr_tp_limit: float,
-    lqr_output_rate_limit: float,
-    lqr_output_lowpass_hz: float,
-    wheel_ctrl_deadzone: float,
-    initial_data: object | None,
-    realtime: bool,
-    impact_level: str | None = None,
-    speed_profile: str | None = None,
-    turn_direction: str | None = None,
-    turn_speed: str = "high",
-    turn_test: bool = False,
-    leg_sync_kp: float = LEG_THETA_SYNC_KP,
-    leg_sync_kd: float = LEG_THETA_SYNC_KD,
-    yaw_turn_kp: float = 1.8,
-    yaw_turn_kd: float = 0.0,
-) -> None:
-    import mujoco.viewer  # pylint: disable=import-outside-toplevel
-
-    if initial_data is not None:
-        data = _copy_data(mujoco, model, initial_data)
-    else:
-        data = mujoco.MjData(model)
-        mujoco.mj_resetData(model, data)
-        mujoco.mj_forward(model, data)
-    if initial_data is None and lqr_test and lqr_auto_design:
-        data = _prepare_lqr_operating_point(
-            mujoco,
-            model,
-            left_target,
-            right_target,
-            leg_branch,
-            ik_search_radius,
-            ik_search_samples,
-        )
-    timestep = float(model.opt.timestep)
-    render_interval_steps = max(1, round(1.0 / (60.0 * timestep)))
-    previous_wheel_torque = 0.0
-    previous_pitch_torque = 0.0
-    previous_yaw_error = 0.0
-    previous_raw_yaw_error = 0.0
-    filtered_yaw_rate = 0.0
-    filtered_yaw_error = 0.0
-    filtered_yaw_error_rate = 0.0
-    filtered_sync_error = 0.0
-    filtered_sync_error_rate = 0.0
-    filtered_left_theta = 0.0
-    filtered_right_theta = 0.0
-    yaw_rate_reference = 0.0
-    turn_torque = 0.0
-    left_wheel_torque = 0.0
-    right_wheel_torque = 0.0
-    length_force_delta = 0.0
-    ik_target_cache: dict[tuple[str, float, float, str, float, int], tuple[float, float]] = {}
-    vmc_memory: dict[str, VmcSideMemory] = {}
-    odometry = SimulatedOdometry()
-    with mujoco.viewer.launch_passive(model, data) as viewer:
-        viewer.sync()
-        wall_start = time.perf_counter()
-        for step in range(steps):
-            _apply_base_impact(mujoco, model, data, impact_level, step)
-            _update_simulated_odometry(mujoco, model, data, odometry)
-            if lock_base:
-                _lock_base_to_initial(mujoco, model, data)
-            wheel_torque = previous_wheel_torque
-            pitch_torque = previous_pitch_torque
-            if lqr_test and step % lqr_control_period_steps == 0:
-                time_s = step * timestep
-                _, x_reference_rate = _trapezoid_speed_reference(speed_profile, time_s)
-                wheel_torque, pitch_torque, length_force_delta, _, _ = _lqr_middle_control(
-                    mujoco,
-                    model,
-                    data,
-                    lqr_x_reference,
-                    lqr_x_source,
-                    lqr_gain_scale,
-                    lqr_k,
-                    lqr_x0,
-                    lqr_u0,
-                    lqr_wheel_sign,
-                    lqr_pitch_sign,
-                    lqr_t_limit,
-                    lqr_tp_limit,
-                    lqr_x_outer_kp,
-                    lqr_x_outer_max_v,
-                    x_reference_rate,
-                    speed_profile is not None,
-                    odometry,
-                )
-                control_dt = timestep * lqr_control_period_steps
-                wheel_torque = _lowpass_value(
-                    wheel_torque,
-                    previous_wheel_torque,
-                    lqr_output_lowpass_hz,
-                    control_dt,
-                )
-                pitch_torque = _lowpass_value(
-                    pitch_torque,
-                    previous_pitch_torque,
-                    lqr_output_lowpass_hz,
-                    control_dt,
-                )
-                if lqr_output_rate_limit > 0.0:
-                    max_delta = lqr_output_rate_limit * timestep
-                    wheel_torque = float(
-                        np.clip(
-                            wheel_torque,
-                            previous_wheel_torque - max_delta,
-                            previous_wheel_torque + max_delta,
-                        )
-                    )
-                    pitch_torque = float(
-                        np.clip(
-                            pitch_torque,
-                            previous_pitch_torque - max_delta,
-                            previous_pitch_torque + max_delta,
-                        )
-                    )
-                previous_wheel_torque = wheel_torque
-                previous_pitch_torque = pitch_torque
-                yaw_rate_reference = _turn_rate_reference(turn_direction, turn_speed, turn_test, time_s)
-                raw_yaw_rate = float(data.qvel[5])
-                filtered_yaw_rate = _lowpass_value(
-                    raw_yaw_rate,
-                    filtered_yaw_rate,
-                    YAW_TURN_INPUT_LOWPASS_HZ,
-                    control_dt,
-                )
-                raw_yaw_error = yaw_rate_reference - filtered_yaw_rate
-                filtered_yaw_error = _lowpass_value(
-                    raw_yaw_error,
-                    filtered_yaw_error,
-                    YAW_TURN_ERROR_LOWPASS_HZ,
-                    control_dt,
-                )
-                if previous_yaw_error == 0.0 and step == 0:
-                    previous_yaw_error = raw_yaw_error
-                    previous_raw_yaw_error = raw_yaw_error
-                    filtered_yaw_error_rate = 0.0
-                else:
-                    raw_yaw_error_rate = (raw_yaw_error - previous_raw_yaw_error) / control_dt
-                    filtered_yaw_error_rate = _lowpass_value(
-                        raw_yaw_error_rate,
-                        filtered_yaw_error_rate,
-                        YAW_TURN_DERIVATIVE_LOWPASS_HZ,
-                        control_dt,
-                    )
-                previous_raw_yaw_error = raw_yaw_error
-                turn_torque, previous_yaw_error = _yaw_turn_torque(
-                    yaw_rate_reference,
-                    filtered_yaw_rate,
-                    previous_yaw_error,
-                    control_dt,
-                    kp=yaw_turn_kp,
-                    kd=yaw_turn_kd,
-                    error_rate=filtered_yaw_error_rate,
-                    error=filtered_yaw_error,
-                )
-                left_wheel_torque, right_wheel_torque = _split_wheel_torque(wheel_torque, turn_torque)
-            pitch_for_theta_ff = _base_pitch_from_qpos(data.qpos)
-            step_left_target = _apply_theta_pitch_feedforward(left_target, pitch_for_theta_ff, theta_pitch_ff)
-            step_right_target = _apply_theta_pitch_feedforward(right_target, pitch_for_theta_ff, theta_pitch_ff)
-            effective_theta_kp = 0.0 if lqr_test else theta_kp
-            effective_theta_kd = 0.0 if lqr_test else theta_kd
-            side_length_force_ff = (length_force_ff + length_force_delta,) * 2
-            left_leg = _compute_virtual_leg_state(mujoco, model, data, "left")
-            right_leg = _compute_virtual_leg_state(mujoco, model, data, "right")
-            raw_sync_error = right_leg.theta - left_leg.theta
-            filtered_left_theta = _lowpass_value(
-                left_leg.theta,
-                filtered_left_theta,
-                LEG_SYNC_INPUT_LOWPASS_HZ,
-                timestep,
-            )
-            filtered_right_theta = _lowpass_value(
-                right_leg.theta,
-                filtered_right_theta,
-                LEG_SYNC_INPUT_LOWPASS_HZ,
-                timestep,
-            )
-            filtered_sync_input_error = filtered_right_theta - filtered_left_theta
-            sync_error = _lowpass_value(
-                filtered_sync_input_error,
-                filtered_sync_error,
-                LEG_SYNC_ERROR_LOWPASS_HZ,
-                timestep,
-            )
-            filtered_sync_error = sync_error
-            sync_error_rate = _lowpass_value(
-                right_leg.theta_rate - left_leg.theta_rate, filtered_sync_error_rate, LEG_SYNC_DERIVATIVE_LOWPASS_HZ, timestep
-            )
-            filtered_sync_error_rate = sync_error_rate
-            sync_torque = leg_sync_kp * sync_error + leg_sync_kd * sync_error_rate
-            vmc_diagnostics: dict[str, VmcDiagnostics] = {}
-            _virtual_rod_ik_ctrl(
-                mujoco,
-                model,
-                data,
-                step_left_target,
-                step_right_target,
-                virtual_rod_control,
-                leg_branch,
-                ik_search_radius,
-                ik_search_samples,
-                length_kp,
-                length_kd,
-                effective_theta_kp,
-                effective_theta_kd,
-                joint_kd,
-                ik_target_cache,
-                theta_force_offset=(
-                    pitch_torque + sync_torque,
-                    pitch_torque - sync_torque,
-                ),
-                length_force_ff=side_length_force_ff,
-                length_ki=length_ki,
-                length_integral_limit=length_integral_limit,
-                length_force_rate_limit=length_force_rate_limit,
-                vmc_memory=vmc_memory,
-                vmc_diagnostics=vmc_diagnostics,
-            )
-            if lqr_test:
-                _apply_wheel_torque_pair_ctrl(
-                    mujoco,
-                    model,
-                    data,
-                    left_wheel_torque,
-                    right_wheel_torque,
-                    wheel_ctrl_deadzone,
-                )
-            mujoco.mj_step(model, data)
-            _assert_finite("qpos", data.qpos)
-            _assert_finite("qvel", data.qvel)
-            render_due = (step + 1) % render_interval_steps == 0 or step + 1 == steps
-            if render_due:
-                _set_viewer_status_overlay(
-                    viewer=viewer,
-                    mujoco=mujoco,
-                    model=model,
-                    data=data,
-                    step=step,
-                    wheel_torque=wheel_torque,
-                    pitch_torque=pitch_torque,
-                    yaw_rate_reference=yaw_rate_reference,
-                    turn_torque=turn_torque,
-                    left_wheel_torque=left_wheel_torque,
-                    right_wheel_torque=right_wheel_torque,
-                    sync_torque=sync_torque,
-                    left_target=left_target,
-                    right_target=right_target,
-                    lqr_x0=lqr_x0,
-                    lqr_u0=lqr_u0,
-                    lqr_design_result=lqr_design_result,
-                    x_source=lqr_x_source,
-                    vmc_diagnostics=vmc_diagnostics,
-                    lqr_output_lowpass_hz=lqr_output_lowpass_hz,
-                    wheel_ctrl_deadzone=wheel_ctrl_deadzone,
-                )
                 viewer.sync()
                 if realtime:
                     target_wall_time = (step + 1) * timestep

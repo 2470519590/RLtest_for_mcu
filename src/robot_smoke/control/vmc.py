@@ -156,6 +156,7 @@ def _drive_virtual_rod_vmc_ctrl(
     length_ki: float = 0.0,
     length_integral_limit: float = 0.3,
     length_force_rate_limit: float = 0.0,
+    branch_guard_enabled: bool = True,
     memory: VmcSideMemory | None = None,
 ) -> tuple[bool, VmcDiagnostics]:
     state = _compute_virtual_leg_state(mujoco, model, data, side)
@@ -166,10 +167,22 @@ def _drive_virtual_rod_vmc_ctrl(
     theta_error = target[1] - state.theta
     theta_force_raw = theta_kp * theta_error - theta_kd * state.theta_rate + theta_force_offset
     dt = float(model.opt.timestep)
-    _ = length_ki
-    _ = length_integral_limit
-    memory.length_integral = 0.0
-    length_force_raw = length_force_ff + length_kp * length_error - length_kd * state.length_rate
+    if length_ki > 0.0 and length_integral_limit > 0.0:
+        memory.length_integral = float(
+            np.clip(
+                memory.length_integral + length_error * dt,
+                -length_integral_limit,
+                length_integral_limit,
+            )
+        )
+    else:
+        memory.length_integral = 0.0
+    length_force_raw = (
+        length_force_ff
+        + length_kp * length_error
+        + length_ki * memory.length_integral
+        - length_kd * state.length_rate
+    )
     length_force = float(np.clip(length_force_raw, -length_force_limit, length_force_limit))
     if length_force_rate_limit > 0.0:
         max_delta = length_force_rate_limit * dt
@@ -185,7 +198,7 @@ def _drive_virtual_rod_vmc_ctrl(
     branch_guard_error = _leg_branch_guard_error(branch)
     tau_support = shape_jacobian.T @ np.array([length_force, 0.0], dtype=float)
     tau_guard = np.zeros(2, dtype=float)
-    if branch_guard_error > 0.0:
+    if branch_guard_enabled and branch_guard_error > 0.0:
         joint_ids = _leg_drive_joint_ids(mujoco, model, side)
         qpos_ids = [int(model.jnt_qposadr[joint_id]) for joint_id in joint_ids]
         dof_ids = [int(model.jnt_dofadr[joint_id]) for joint_id in joint_ids]
@@ -221,8 +234,13 @@ def _drive_virtual_rod_vmc_ctrl(
         theta_force_raw=float(theta_force_raw),
         theta_force=theta_force,
         theta_force_scale=theta_scale,
+        branch_guard_error=branch_guard_error,
         support_tau_front=float(tau_support[0]),
         support_tau_rear=float(tau_support[1]),
+        guard_tau_front=float(tau_guard[0]),
+        guard_tau_rear=float(tau_guard[1]),
+        theta_tau_front=float(tau_theta[0]),
+        theta_tau_rear=float(tau_theta[1]),
         joint_tau_front_raw=float(joint_tau_raw[0]),
         joint_tau_rear_raw=float(joint_tau_raw[1]),
         joint_tau_front=float(joint_tau[0]),

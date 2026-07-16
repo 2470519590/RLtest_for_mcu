@@ -231,21 +231,19 @@ def _virtual_rod_ik_ctrl(
     theta_kp: float,
     theta_kd: float,
     joint_kd: float,
-    ik_target_cache: dict[tuple[str, float, float, str, float, int], tuple[float, float]] | None = None,
+    ik_target_cache: dict[tuple[object, ...], tuple[float, float]] | None = None,
     theta_force_offset: float | tuple[float, float] = 0.0,
     length_force_ff: float | tuple[float, float] = 0.0,
     length_ki: float = 0.0,
     length_integral_limit: float = 0.3,
     length_force_rate_limit: float = 0.0,
+    branch_guard_enabled: bool = True,
     vmc_memory: dict[str, VmcSideMemory] | None = None,
     vmc_diagnostics: dict[str, VmcDiagnostics] | None = None,
 ) -> tuple[float, bool, float, float]:
     data.ctrl[:] = 0.0
     max_length_error = 0.0
     max_theta_error = 0.0
-    reset_data = mujoco.MjData(model)
-    mujoco.mj_resetData(model, reset_data)
-    mujoco.mj_forward(model, reset_data)
     saturated = False
     if isinstance(theta_force_offset, tuple):
         side_theta_offsets = dict(zip(("left", "right"), theta_force_offset))
@@ -256,18 +254,33 @@ def _virtual_rod_ik_ctrl(
     else:
         side_length_force_ff = {"left": length_force_ff, "right": length_force_ff}
     for side, target in (("left", left_target), ("right", right_target)):
-        reset_state = _compute_virtual_leg_state(mujoco, model, reset_data, side)
-        cache_key = (
-            side,
-            round(target[0], 4),
-            round(target[1] / 0.01) * 0.01,
-            leg_branch,
-            round(ik_search_radius, 4),
-            ik_search_samples,
-        )
+        if virtual_rod_control == "vmc":
+            # VMC applies task-space force through J^T. Its IK output is only
+            # a normal-branch recovery posture for the branch guard, so it
+            # must not be recomputed whenever roll integration changes L_d.
+            cache_key: tuple[object, ...] = (
+                side,
+                "vmc_branch_safe_pose",
+                leg_branch,
+                round(ik_search_radius, 4),
+                ik_search_samples,
+            )
+        else:
+            cache_key = (
+                side,
+                round(target[0], 4),
+                round(target[1] / 0.01) * 0.01,
+                leg_branch,
+                round(ik_search_radius, 4),
+                ik_search_samples,
+            )
         if ik_target_cache is not None and cache_key in ik_target_cache:
             front_target, rear_target = ik_target_cache[cache_key]
         else:
+            reset_data = mujoco.MjData(model)
+            mujoco.mj_resetData(model, reset_data)
+            mujoco.mj_forward(model, reset_data)
+            reset_state = _compute_virtual_leg_state(mujoco, model, reset_data, side)
             front_target, rear_target = _branch_aware_ik_targets(
                 mujoco,
                 model,
@@ -317,6 +330,7 @@ def _virtual_rod_ik_ctrl(
                 length_ki=length_ki,
                 length_integral_limit=length_integral_limit,
                 length_force_rate_limit=length_force_rate_limit,
+                branch_guard_enabled=branch_guard_enabled,
                 memory=side_memory,
             )
             saturated = side_saturated or saturated

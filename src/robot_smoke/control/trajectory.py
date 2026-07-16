@@ -8,8 +8,8 @@ def trapezoid_speed_reference(profile: str | None, time_s: float) -> tuple[float
     if profile is None:
         return 0.0, 0.0
     peak_speed = {"low": 1.00, "medium": 2.00, "high": 3.00}[profile]
-    ramp_s = 1.5
-    cruise_s = 4.0
+    ramp_s = 0.75
+    cruise_s = 3.6 if profile == "high" else 6.0
     acceleration = peak_speed / ramp_s
     time_s = max(0.0, time_s)
     if time_s < ramp_s:
