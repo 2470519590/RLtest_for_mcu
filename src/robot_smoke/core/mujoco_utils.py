@@ -7,6 +7,8 @@ from typing import Iterable
 
 import numpy as np
 
+_NAME_ID_CACHE: dict[tuple[int, int, str], int] = {}
+
 
 def prepare_mujoco_import() -> None:
     if os.name == "nt" and os.environ.get("MUJOCO_GL", "").lower() == "osmesa":
@@ -66,10 +68,16 @@ def joint_for_actuator(mujoco, model, actuator_id: int) -> tuple[int, str]:
 
 
 def id_by_name(mujoco, model, obj_type, object_name: str) -> int:
+    key = (id(model), int(obj_type), object_name)
+    cached = _NAME_ID_CACHE.get(key)
+    if cached is not None:
+        return cached
     obj_id = mujoco.mj_name2id(model, obj_type, object_name)
     if obj_id < 0:
         raise RuntimeError(f"missing MuJoCo object: {object_name}")
-    return int(obj_id)
+    obj_id = int(obj_id)
+    _NAME_ID_CACHE[key] = obj_id
+    return obj_id
 
 
 def body_pos_vel(mujoco, model, data, body_name: str) -> tuple[np.ndarray, np.ndarray]:

@@ -26,3 +26,13 @@ def trapezoid_speed_reference(profile: str | None, time_s: float) -> tuple[float
             peak_speed - acceleration * ramp_down_time,
         )
     return peak_speed * (ramp_s + cruise_s), 0.0
+
+
+def is_speed_profile_cruise(profile: str | None, time_s: float) -> bool:
+    """Return whether a speed profile is in its constant-velocity segment."""
+    if profile is None:
+        return False
+    ramp_s = 0.75
+    cruise_s = 3.6 if profile == "high" else 6.0
+    time_s = max(0.0, time_s)
+    return ramp_s <= time_s < ramp_s + cruise_s

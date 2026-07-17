@@ -176,6 +176,13 @@ class LqrHistorySample:
     right_wheel_motor_tau: float
     left_wheel_speed: float
     right_wheel_speed: float
+    left_contact_normal_force: float
+    right_contact_normal_force: float
+    airborne: bool
+    vertical_speed: float
+    left_wheel_z: float
+    right_wheel_z: float
+    landing_phase: str
 
 
 @dataclass(frozen=True)
@@ -349,6 +356,12 @@ class VirtualRodResult:
     final_left_wheel_speed: float
     final_right_wheel_speed: float
     final_base_height: float
+    max_base_height: float
+    min_left_contact_force: float
+    min_right_contact_force: float
+    airborne_steps: int
+    first_airborne_time: float | None
+    last_airborne_time: float | None
     final_operating_point: StaticOperatingPointSample | None
 
 

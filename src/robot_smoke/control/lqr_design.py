@@ -1,4 +1,4 @@
-﻿"""Local LQR operating-point preparation and finite-difference design."""
+"""Local LQR operating-point preparation and finite-difference design."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from ..model.actuators import (
 from ..model.fivebar import compute_leg_branch_metrics as _compute_leg_branch_metrics
 from ..model.kinematics import (
     compute_virtual_leg_state as _compute_virtual_leg_state,
+    wheel_center_heights as _wheel_center_heights,
     wheel_radius as _wheel_radius,
     wheel_speeds as _wheel_speeds,
 )
@@ -29,7 +30,7 @@ from ..control.ik import (
     _branch_aware_ik_targets,
     _virtual_rod_ik_ctrl,
 )
-from ..model.mechanics import _collect_static_operating_point_sample
+from ..model.mechanics import _collect_static_operating_point_sample, _contact_normal_force_for_wheel
 from ..core.mujoco_utils import assert_finite as _assert_finite
 from ..core.mujoco_utils import copy_data as _copy_data
 from ..core.mujoco_utils import id_by_name as _id_by_name
@@ -637,7 +638,6 @@ def _lqr_middle_control(
     lqr_x_outer_kp: float,
     lqr_x_outer_max_v: float,
     x_reference_rate: float = 0.0,
-    velocity_only: bool = False,
     odometry=None,
 ) -> tuple[float, float, float, LqrState, float]:
     state = _compute_lqr_state(mujoco, model, data, x_reference, x_source, x_reference_rate, odometry)
@@ -653,7 +653,6 @@ def _lqr_middle_control(
         lqr_tp_limit,
         lqr_x_outer_kp,
         lqr_x_outer_max_v,
-        velocity_only,
     )
     return wheel_torque, virtual_pitch_torque, length_force_delta, state, x_velocity_reference + x_reference_rate
 
@@ -694,6 +693,8 @@ def _collect_lqr_history_sample(
     roll_length_geometric_offset: float = 0.0,
     roll_force: float = 0.0,
     side_length_force_ff: tuple[float, float] = (0.0, 0.0),
+    airborne: bool = False,
+    landing_phase: str = "ground",
 ) -> LqrHistorySample:
     lqr_state = _compute_lqr_state(mujoco, model, data, x_reference, x_source, odometry=odometry)
     left = _compute_virtual_leg_state(mujoco, model, data, "left")
@@ -706,6 +707,9 @@ def _collect_lqr_history_sample(
     left_wheel_speed, right_wheel_speed = _wheel_speeds(mujoco, model, data)
     left_diag = (vmc_diagnostics or {}).get("left", VmcDiagnostics(length_error=left_target[0] - left.length))
     right_diag = (vmc_diagnostics or {}).get("right", VmcDiagnostics(length_error=right_target[0] - right.length))
+    left_contact_force = _contact_normal_force_for_wheel(mujoco, model, data, "left")
+    right_contact_force = _contact_normal_force_for_wheel(mujoco, model, data, "right")
+    left_wheel_z, right_wheel_z = _wheel_center_heights(mujoco, model, data)
     left_front_ctrl = float(data.ctrl[left_front])
     left_rear_ctrl = float(data.ctrl[left_rear])
     left_wheel_ctrl = float(data.ctrl[left_wheel])
@@ -800,6 +804,13 @@ def _collect_lqr_history_sample(
         right_wheel_motor_tau=right_wheel_ctrl * float(model.actuator_gear[right_wheel, 0]),
         left_wheel_speed=left_wheel_speed,
         right_wheel_speed=right_wheel_speed,
+        left_contact_normal_force=left_contact_force,
+        right_contact_normal_force=right_contact_force,
+        airborne=airborne,
+        vertical_speed=float(data.qvel[2]) if len(data.qvel) > 2 else 0.0,
+        left_wheel_z=left_wheel_z,
+        right_wheel_z=right_wheel_z,
+        landing_phase=landing_phase,
     )
 
 

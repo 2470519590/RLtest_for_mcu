@@ -74,6 +74,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--turn-length-sine-test", action="store_true", help="高速原地旋转，同时腿长在允许范围内做正弦跟踪")
     parser.add_argument("--turn-drive-test", choices=("low", "high"))
     parser.add_argument("--roll-test", action="store_true", help="中速依次通过左、右单轮三角坡")
+    parser.add_argument("--flight-test", action="store_true", help="高速全宽飞坡，并启用论文第 3 节离地检测")
+    parser.add_argument("--jump-test", action="store_true", help="原地跳跃：腿长从最小值瞬间拉到最大值，并保留离地检测")
+    parser.add_argument(
+        "--forward-jump-test",
+        choices=("low", "medium", "high"),
+        help="前进匀速阶段触发跳跃；触发条件为双腿世界竖直角均小于 3 度",
+    )
     parser.add_argument("--turn-pd-plot", action="store_true")
     parser.add_argument("--roll-length-plot", action="store_true")
     parser.add_argument("--lqr-debug-plot", action="store_true")
@@ -152,6 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
         lqr_pitch_sign=-1.0,
         lqr_t_limit=16.0,
         lqr_tp_limit=2.0,
+        landing_hold_t_limit=2.0,
         lqr_output_rate_limit=1000.0,
         lqr_output_lowpass_hz=0.0,
         wheel_ctrl_deadzone=0.0,
@@ -210,6 +218,13 @@ def build_parser() -> argparse.ArgumentParser:
         leg_length_sine_test=False,
         leg_length_sine_period=1.5,
         roll_test=False,
+        flight_test=False,
+        jump_test=False,
+        forward_jump_test=None,
+        flight_detection_enabled=False,
+        flight_airborne_force_threshold=20.0,
+        flight_airborne_confirm_seconds=0.05,
+        flight_airborne_rearm_seconds=1.0,
         turn_pd_plot=False,
         lqr_debug_plot=False,
         yaw_turn_kp=None,

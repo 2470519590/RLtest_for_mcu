@@ -1,4 +1,4 @@
-﻿"""Runtime kinematic measurements from MuJoCo state."""
+"""Runtime kinematic measurements from MuJoCo state."""
 
 from __future__ import annotations
 
@@ -77,6 +77,13 @@ def wheel_center_positions(mujoco, model, data) -> tuple[float, float]:
     left_id = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, "left_wheel")
     right_id = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, "right_wheel")
     return float(data.xpos[left_id, 0]), float(data.xpos[right_id, 0])
+
+
+def wheel_center_heights(mujoco, model, data) -> tuple[float, float]:
+    """World-frame z positions of the two driven-wheel centers."""
+    left_id = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, "left_wheel")
+    right_id = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, "right_wheel")
+    return float(data.xpos[left_id, 2]), float(data.xpos[right_id, 2])
 
 
 def wheel_center_speeds(mujoco, model, data) -> tuple[float, float]:

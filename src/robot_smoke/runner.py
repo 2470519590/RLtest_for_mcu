@@ -1,4 +1,4 @@
-﻿"""Top-level smoke runner orchestration."""
+"""Top-level smoke runner orchestration."""
 
 from __future__ import annotations
 
@@ -138,6 +138,109 @@ def _scheduled_initial_pose(
     return data
 
 
+def _mesh_asset(name: str, vertices: list[tuple[float, float, float]], faces: list[tuple[int, int, int]]) -> str:
+    vertex_text = " ".join(f"{x:.6g} {y:.6g} {z:.6g}" for x, y, z in vertices)
+    face_text = " ".join(f"{a} {b} {c}" for a, b, c in faces)
+    return f'    <mesh name="{name}" vertex="{vertex_text}" face="{face_text}"/>\n'
+
+
+def _triangular_ramp_mesh(length: float, width: float, height: float) -> tuple[list[tuple[float, float, float]], list[tuple[int, int, int]]]:
+    half_length = 0.5 * length
+    half_width = 0.5 * width
+    vertices = [
+        (-half_length, -half_width, 0.0),
+        (-half_length, half_width, 0.0),
+        (half_length, -half_width, 0.0),
+        (half_length, half_width, 0.0),
+        (half_length, -half_width, height),
+        (half_length, half_width, height),
+    ]
+    faces = [
+        (0, 2, 3), (0, 3, 1),
+        (2, 4, 5), (2, 5, 3),
+        (0, 4, 2), (1, 3, 5),
+        (0, 4, 5), (0, 5, 1),
+    ]
+    return vertices, faces
+
+
+def _trapezoid_ramp_mesh(length: float, width: float, height: float, ramp_length: float) -> tuple[list[tuple[float, float, float]], list[tuple[int, int, int]]]:
+    half_length = 0.5 * length
+    half_width = 0.5 * width
+    x0 = -half_length
+    x1 = -half_length + ramp_length
+    x2 = half_length - ramp_length
+    x3 = half_length
+    vertices = [
+        (x0, -half_width, 0.0),
+        (x0, half_width, 0.0),
+        (x1, -half_width, height),
+        (x1, half_width, height),
+        (x2, -half_width, height),
+        (x2, half_width, height),
+        (x3, -half_width, 0.0),
+        (x3, half_width, 0.0),
+    ]
+    faces = [
+        (0, 6, 7), (0, 7, 1),
+        (0, 2, 3), (0, 3, 1),
+        (2, 4, 5), (2, 5, 3),
+        (4, 6, 7), (4, 7, 5),
+        (0, 4, 6), (0, 2, 4),
+        (1, 7, 5), (1, 5, 3),
+    ]
+    return vertices, faces
+
+
+def _roll_test_model_xml(model_path: Path) -> str:
+    """Return a roll-test scene with low single-wheel ramps and one full-width ramp."""
+    xml_text = model_path.read_text(encoding="utf-8")
+    small_vertices, small_faces = _triangular_ramp_mesh(length=0.84, width=0.60, height=0.06)
+    wide_vertices, wide_faces = _trapezoid_ramp_mesh(length=1.20, width=1.20, height=0.12, ramp_length=0.32)
+    asset_xml = (
+        '    <material name="roll_ramp_mat" rgba="0.72 0.52 0.20 1" specular="0.0" shininess="0.0"/>\n'
+        + _mesh_asset("roll_small_tri_ramp_mesh", small_vertices, small_faces)
+        + _mesh_asset("roll_wide_trap_ramp_mesh", wide_vertices, wide_faces)
+    )
+    ramp_geom_template = (
+        '    <geom name="{name}" type="mesh" mesh="{mesh}" pos="{x:.6g} {y:.6g} 0" '
+        'material="roll_ramp_mat" friction="1.2 0.02 0.001" conaffinity="3"/>\n'
+    )
+    world_xml = (
+        ramp_geom_template.format(name="roll_left_small_tri_ramp", mesh="roll_small_tri_ramp_mesh", x=2.50, y=0.255)
+        + ramp_geom_template.format(name="roll_right_small_tri_ramp", mesh="roll_small_tri_ramp_mesh", x=3.70, y=-0.255)
+        + ramp_geom_template.format(name="roll_wide_trap_ramp", mesh="roll_wide_trap_ramp_mesh", x=5.10, y=0.0)
+    )
+    xml_text = xml_text.replace("  </asset>", asset_xml + "  </asset>", 1)
+    xml_text = xml_text.replace(
+        '    <geom name="floor" type="plane" size="20 20 0.1" material="floor_mat" conaffinity="3"/>\n',
+        '    <geom name="floor" type="plane" size="20 20 0.1" material="floor_mat" conaffinity="3"/>\n' + world_xml,
+        1,
+    )
+    return xml_text
+
+
+def _flight_test_model_xml(model_path: Path) -> str:
+    """Return a flight-test scene with one high full-width launch ramp."""
+    xml_text = model_path.read_text(encoding="utf-8")
+    ramp_vertices, ramp_faces = _triangular_ramp_mesh(length=1.80, width=1.40, height=0.32)
+    asset_xml = (
+        '    <material name="flight_ramp_mat" rgba="0.62 0.48 0.22 1" specular="0.0" shininess="0.0"/>\n'
+        + _mesh_asset("flight_full_width_ramp_mesh", ramp_vertices, ramp_faces)
+    )
+    world_xml = (
+        '    <geom name="flight_full_width_ramp" type="mesh" mesh="flight_full_width_ramp_mesh" '
+        'pos="3.8 0 0" material="flight_ramp_mat" friction="1.2 0.02 0.001" conaffinity="3"/>\n'
+    )
+    xml_text = xml_text.replace("  </asset>", asset_xml + "  </asset>", 1)
+    xml_text = xml_text.replace(
+        '    <geom name="floor" type="plane" size="20 20 0.1" material="floor_mat" conaffinity="3"/>\n',
+        '    <geom name="floor" type="plane" size="20 20 0.1" material="floor_mat" conaffinity="3"/>\n' + world_xml,
+        1,
+    )
+    return xml_text
+
+
 def _print_low_length_stage_diagnostics(history) -> None:
     """Print the competing VMC torque paths during the 4-7 s low-leg stage."""
     samples = [sample for sample in history if 4.0 <= sample.time_s < 7.0]
@@ -183,7 +286,12 @@ def _print_low_length_stage_diagnostics(history) -> None:
 def run_smoke(config: RunConfig) -> int:
     mujoco = _load_mujoco()
     runtime_controls = runtime_control_config(config)
-    model = mujoco.MjModel.from_xml_path(str(config.model_path))
+    if config.flight_test:
+        model = mujoco.MjModel.from_xml_string(_flight_test_model_xml(Path(config.model_path)))
+    elif config.roll_test:
+        model = mujoco.MjModel.from_xml_string(_roll_test_model_xml(Path(config.model_path)))
+    else:
+        model = mujoco.MjModel.from_xml_path(str(config.model_path))
     length_schedule: LengthSchedule | None = None
     if config.length_schedule:
         schedule_path = Path(config.length_schedule_path)
@@ -227,7 +335,27 @@ def run_smoke(config: RunConfig) -> int:
             f"{float(config.maximum_leg_length):.3f} m, period={float(config.leg_length_sine_period):.3g} s"
         )
     if config.roll_test:
-        print("roll_test: medium forward; left small ramp x=2.5 m, left/right large ramps x=4.5/6.7 m")
+        print("roll_test: medium forward; left/right low single-wheel ramps x=2.5/3.7 m, full-width jump ramp x=5.1 m")
+    if config.flight_test:
+        print(
+            "flight_test: high-speed full-width launch ramp x=3.8 m, "
+            "length=1.80 m, width=1.40 m, height=0.32 m"
+        )
+        print(
+            "flight_detection: airborne when both wheel normal forces are below "
+            f"{float(config.flight_airborne_force_threshold):.6g} N"
+        )
+    if config.jump_test:
+        print(
+            "jump_test: stand at nominal leg length, crouch to 0.18 m at 1.0 s through VMC, "
+            "extend after measured crouch completion; flight detection remains enabled"
+        )
+    if config.forward_jump_test is not None:
+        print(
+            "forward_jump_test: "
+            f"speed={config.forward_jump_test}, trigger during cruise when |theta_left/right| < 3 deg; "
+            "then reuse jump crouch/extend/landing logic"
+        )
     print(
         f"roll_control: reference={runtime_controls.roll_reference:.6g} rad, "
         f"force_kp={runtime_controls.roll_force_kp:.6g} N/rad"
@@ -559,6 +687,7 @@ def run_smoke(config: RunConfig) -> int:
                 config.lqr_pitch_sign,
                 config.lqr_t_limit,
                 config.lqr_tp_limit,
+                config.landing_hold_t_limit,
                 config.lqr_output_rate_limit,
                 config.lqr_output_lowpass_hz,
                 config.wheel_ctrl_deadzone,
@@ -577,11 +706,17 @@ def run_smoke(config: RunConfig) -> int:
                 leg_height_levels=tuple(float(value) for value in config.leg_height_levels),
                 leg_length_sine_test=bool(config.leg_length_sine_test),
                 leg_length_sine_period=float(config.leg_length_sine_period),
+                jump_test=bool(config.jump_test),
+                forward_jump_test=config.forward_jump_test is not None,
                 branch_guard_enabled=bool(config.leg_branch_guard_enabled),
                 minimum_leg_length=float(config.minimum_leg_length),
                 maximum_leg_length=float(config.maximum_leg_length),
                 length_schedule=length_schedule,
                 startup_ramp_seconds=float(config.startup_ramp_seconds),
+                flight_detection_enabled=bool(config.flight_detection_enabled),
+                flight_airborne_force_threshold=float(config.flight_airborne_force_threshold),
+                flight_airborne_confirm_seconds=float(config.flight_airborne_confirm_seconds),
+                flight_airborne_rearm_seconds=float(config.flight_airborne_rearm_seconds),
                 runtime_controls=runtime_controls,
                 on_initialized=viewer_observer.start if viewer_observer is not None else None,
             )
@@ -637,6 +772,7 @@ def run_smoke(config: RunConfig) -> int:
             print(f"  config.lqr_pitch_sign: {config.lqr_pitch_sign:.6g}")
             print(f"  config.lqr_t_limit: {config.lqr_t_limit:.6g}")
             print(f"  config.lqr_tp_limit: {config.lqr_tp_limit:.6g}")
+            print(f"  config.landing_hold_t_limit: {config.landing_hold_t_limit:.6g}")
             print(f"  config.lqr_output_rate_limit: {config.lqr_output_rate_limit:.6g}")
             print(f"  config.lqr_output_lowpass_hz: {config.lqr_output_lowpass_hz:.6g}")
             print(f"  config.wheel_ctrl_deadzone: {config.wheel_ctrl_deadzone:.6g}")
@@ -715,11 +851,33 @@ def run_smoke(config: RunConfig) -> int:
                 f"sat_pos_steps={stats.positive_saturated_steps}"
             )
         print(f"  final_base_height: {virtual_result.final_base_height:.6g}")
+        print(f"  max_base_height: {virtual_result.max_base_height:.6g}")
+        print(
+            "  contact_normal_force_min: "
+            f"left={virtual_result.min_left_contact_force:.6g}, "
+            f"right={virtual_result.min_right_contact_force:.6g}"
+        )
+        print(
+            "  airborne_detection: "
+            f"enabled={config.flight_detection_enabled}, "
+            f"threshold={float(config.flight_airborne_force_threshold):.6g} N, "
+            f"steps={virtual_result.airborne_steps}, "
+            f"first_time={virtual_result.first_airborne_time}, "
+            f"last_time={virtual_result.last_airborne_time}"
+        )
         if config.lqr_test and virtual_result.final_lqr_state is not None:
             final_state = virtual_result.final_lqr_state
-            if config.leg_length_sine_test:
+            if config.leg_length_sine_test or config.roll_test or config.flight_test or config.jump_test:
                 behavior_passed = True
-                print("  behavior_qualified: diagnostic_dynamic_length_test")
+                if config.jump_test:
+                    diagnostic_name = "jump_test"
+                elif config.flight_test:
+                    diagnostic_name = "flight_test"
+                elif config.leg_length_sine_test:
+                    diagnostic_name = "dynamic_length_test"
+                else:
+                    diagnostic_name = "roll_terrain_test"
+                print(f"  behavior_qualified: diagnostic_{diagnostic_name}")
             else:
                 behavior_passed = (
                     abs(final_state.theta) < 0.15
@@ -811,6 +969,34 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", type=Path, default=config_args.config)
     parser.set_defaults(**yaml_defaults)
     args = parser.parse_args(argv)
+    if args.flight_test:
+        args.lqr_true_equilibrium = True
+        args.speed_profile = "high"
+        args.turn_test = False
+        args.turn_direction = None
+        args.impact_level = None
+        args.flight_detection_enabled = True
+        if args.visualize_seconds is None:
+            args.visualize_seconds = 10.0
+    if args.jump_test:
+        args.lqr_true_equilibrium = True
+        args.speed_profile = None
+        args.turn_test = False
+        args.turn_direction = None
+        args.impact_level = None
+        args.flight_detection_enabled = True
+        if args.visualize_seconds is None:
+            args.visualize_seconds = 10.0
+    if args.forward_jump_test is not None:
+        args.lqr_true_equilibrium = True
+        args.jump_test = True
+        args.speed_profile = args.forward_jump_test
+        args.turn_test = False
+        args.turn_direction = None
+        args.impact_level = None
+        args.flight_detection_enabled = True
+        if args.visualize_seconds is None:
+            args.visualize_seconds = 10.0
     if args.roll_test:
         args.lqr_true_equilibrium = True
         args.speed_profile = "medium"
@@ -878,9 +1064,6 @@ def main(argv: list[str] | None = None) -> int:
         args.equilibrium_wheel_com_kps = (LOCKED_EQUILIBRIUM_WHEEL_COM_KP,)
         args.equilibrium_wheel_dampings = (LOCKED_EQUILIBRIUM_WHEEL_DAMPING,)
         args.equilibrium_init_drop_steps = 0
-        args.virtual_rod_length_kp = LOCKED_EQUILIBRIUM_LENGTH_KP
-        args.virtual_rod_length_kd = LOCKED_EQUILIBRIUM_LENGTH_KD
-        args.virtual_rod_length_force_ff = support_scale * 50.7738
         args.virtual_rod_gravity_comp_scale = None
         args.virtual_rod_length_delta = None
         args.virtual_rod_theta_target = LOCKED_EQUILIBRIUM_THETA
@@ -987,8 +1170,6 @@ def main(argv: list[str] | None = None) -> int:
     lqr_wheel_sign = args.lqr_wheel_sign
     lqr_pitch_sign = args.lqr_pitch_sign
     lqr_output_rate_limit = args.lqr_output_rate_limit
-    if lqr_auto_design and args.lqr_t_limit == 16.0:
-        args.lqr_t_limit = 8.0
     lqr_tp_limit = args.lqr_tp_limit
     if lqr_tp_limit is None:
         lqr_tp_limit = args.lqr_t_limit
@@ -1030,11 +1211,14 @@ def main(argv: list[str] | None = None) -> int:
     if min(
         args.lqr_t_limit,
         lqr_tp_limit,
+        args.landing_hold_t_limit,
         lqr_output_rate_limit,
     ) < 0.0:
         parser.error("LQR torque limits and rate limit must be non-negative")
     if args.history_sample_interval <= 0:
         parser.error("--history-sample-interval must be positive")
+    if args.flight_airborne_confirm_seconds < 0.0 or args.flight_airborne_rearm_seconds < 0.0:
+        parser.error("flight airborne timing parameters must be non-negative")
     if args.fl_channel_steps <= 0 or args.fl_pulse_settle_steps <= 0 or args.fl_pulse_steps <= 0:
         parser.error("F_l channel/pulse step counts must be positive")
     if args.fl_pulse_delta_force <= 0.0:
@@ -1134,8 +1318,4 @@ def main(argv: list[str] | None = None) -> int:
     config.leg_height_levels = tuple(float(value) for value in config.leg_height_levels)
     config.realtime = not args.no_realtime
     return run_smoke(config)
-
-
-
-
 

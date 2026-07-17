@@ -120,8 +120,10 @@ def plot_roll_length_history(
     left_force_bias = _series(samples, "left_length_force_ff", np.ones(len(samples), dtype=bool))
     right_force_bias = _series(samples, "right_length_force_ff", np.ones(len(samples), dtype=bool))
     roll_force = _series(samples, "roll_force", np.ones(len(samples), dtype=bool))
+    left_contact = _series(samples, "left_contact_normal_force", np.ones(len(samples), dtype=bool))
+    right_contact = _series(samples, "right_contact_normal_force", np.ones(len(samples), dtype=bool))
 
-    figure, axes = plt.subplots(5, 1, figsize=(11, 13), sharex=True)
+    figure, axes = plt.subplots(6, 1, figsize=(11, 15), sharex=True)
     axes[0].plot(time_s, left_length_ref, "--", label="left L_d")
     axes[0].plot(time_s, left_length, label="left L")
     axes[0].plot(time_s, right_length_ref, "--", label="right L_d")
@@ -143,7 +145,11 @@ def plot_roll_length_history(
     axes[4].plot(time_s, right_force_bias, "--", label="right F_base - F_roll")
     axes[4].plot(time_s, roll_force, ":", label="F_roll")
     axes[4].set_ylabel("N")
-    axes[4].set_xlabel("time (s)")
+    axes[5].plot(time_s, left_contact, label="left F_N")
+    axes[5].plot(time_s, right_contact, label="right F_N")
+    axes[5].axhline(20.0, color="black", linestyle="--", linewidth=1.0, label="airborne threshold 20 N")
+    axes[5].set_ylabel("N")
+    axes[5].set_xlabel("time (s)")
     for axis in axes:
         axis.legend(loc="upper right")
         axis.grid(True)
@@ -171,6 +177,7 @@ def plot_lqr_debug_history(
     path.parent.mkdir(parents=True, exist_ok=True)
     mask = np.ones(len(samples), dtype=bool)
     time_s = np.array([sample.time_s for sample in samples], dtype=float)
+    x = _series(samples, "x", mask)
     theta = _series(samples, "theta", mask)
     pitch = _series(samples, "pitch", mask)
     x_rate = _series(samples, "x_rate", mask)
@@ -183,34 +190,86 @@ def plot_lqr_debug_history(
     right_length = _series(samples, "right_length", mask)
     left_length_ref = _series(samples, "left_length_reference", mask)
     right_length_ref = _series(samples, "right_length_reference", mask)
+    left_wheel_z = _series(samples, "left_wheel_z", mask)
+    right_wheel_z = _series(samples, "right_wheel_z", mask)
+    left_contact = _series(samples, "left_contact_normal_force", mask)
+    right_contact = _series(samples, "right_contact_normal_force", mask)
+    airborne = np.array([sample.airborne for sample in samples], dtype=bool)
+    landing_phases = [sample.landing_phase for sample in samples]
 
-    figure, axes = plt.subplots(6, 1, figsize=(12, 15), sharex=True)
-    axes[0].plot(time_s, x_velocity_reference, "--", label="dx_ref")
-    axes[0].plot(time_s, x_rate, label="dx")
-    axes[0].set_ylabel("m/s")
+    figure, axes = plt.subplots(9, 1, figsize=(12, 21), sharex=True)
+    axes[0].plot(time_s, x, label="x - x_ref")
+    axes[0].axhline(0.0, color="black", linestyle="--", linewidth=1.0, label="x_ref")
+    axes[0].set_ylabel("m")
 
-    axes[1].plot(time_s, np.degrees(pitch), label="pitch")
-    axes[1].axhline(0.0, color="black", linestyle="--", linewidth=1.0)
-    axes[1].set_ylabel("deg")
+    axes[1].plot(time_s, x_velocity_reference, "--", label="dx_ref")
+    axes[1].plot(time_s, x_rate, label="dx - dx_ref")
+    axes[1].set_ylabel("m/s")
 
-    axes[2].plot(time_s, np.degrees(theta), label="theta")
+    axes[2].plot(time_s, np.degrees(pitch), label="pitch")
     axes[2].axhline(0.0, color="black", linestyle="--", linewidth=1.0)
     axes[2].set_ylabel("deg")
 
-    axes[3].plot(time_s, wheel_torque, label="T wheel")
-    axes[3].set_ylabel("N m")
+    axes[3].plot(time_s, np.degrees(theta), label="theta")
+    axes[3].axhline(0.0, color="black", linestyle="--", linewidth=1.0)
+    axes[3].set_ylabel("deg")
 
-    axes[4].plot(time_s, pitch_torque, label="Tp LQR")
-    axes[4].plot(time_s, left_pitch_torque, "--", label="Tp left")
-    axes[4].plot(time_s, right_pitch_torque, "--", label="Tp right")
+    axes[4].plot(time_s, wheel_torque, label="T wheel")
     axes[4].set_ylabel("N m")
 
-    axes[5].plot(time_s, left_length_ref, "--", label="left L_ref")
-    axes[5].plot(time_s, left_length, label="left L")
-    axes[5].plot(time_s, right_length_ref, "--", label="right L_ref")
-    axes[5].plot(time_s, right_length, label="right L")
-    axes[5].set_ylabel("m")
-    axes[5].set_xlabel("time (s)")
+    axes[5].plot(time_s, pitch_torque, label="Tp LQR")
+    axes[5].plot(time_s, left_pitch_torque, "--", label="Tp left")
+    axes[5].plot(time_s, right_pitch_torque, "--", label="Tp right")
+    axes[5].set_ylabel("N m")
+
+    axes[6].plot(time_s, left_length_ref, "--", label="left L_ref")
+    axes[6].plot(time_s, left_length, label="left L")
+    axes[6].plot(time_s, right_length_ref, "--", label="right L_ref")
+    axes[6].plot(time_s, right_length, label="right L")
+    axes[6].set_ylabel("m")
+
+    axes[7].plot(time_s, left_wheel_z, label="left wheel z")
+    axes[7].plot(time_s, right_wheel_z, label="right wheel z")
+    axes[7].axhline(0.085, color="black", linestyle="--", linewidth=1.0, label="wheel radius")
+    axes[7].set_ylabel("m")
+
+    axes[8].plot(time_s, left_contact, label="left F_N")
+    axes[8].plot(time_s, right_contact, label="right F_N")
+    axes[8].axhline(20.0, color="black", linestyle="--", linewidth=1.0, label="airborne threshold 20 N")
+    phase_colors = {
+        "airborne": "tab:red",
+        "landing_hold": "tab:green",
+        "ground": "0.35",
+    }
+    last_phase = landing_phases[0] if landing_phases else "ground"
+    phase_labels_used: set[str] = set()
+    for index, phase in enumerate(landing_phases[1:], start=1):
+        if phase == last_phase:
+            continue
+        color = phase_colors.get(phase, "0.35")
+        label = f"phase: {phase}" if phase not in phase_labels_used else None
+        for axis in axes:
+            axis.axvline(time_s[index], color=color, linestyle=":", linewidth=1.2, alpha=0.85, label=label)
+            label = None
+        phase_labels_used.add(phase)
+        last_phase = phase
+    previous_airborne = airborne[0] if len(airborne) else False
+    start_label_used = False
+    end_label_used = False
+    for index, current_airborne in enumerate(airborne[1:], start=1):
+        if current_airborne == previous_airborne:
+            continue
+        if current_airborne:
+            label = "airborne start" if not start_label_used else None
+            axes[8].axvline(time_s[index], color="tab:red", linestyle=":", linewidth=1.2, label=label)
+            start_label_used = True
+        else:
+            label = "airborne end" if not end_label_used else None
+            axes[8].axvline(time_s[index], color="tab:green", linestyle=":", linewidth=1.2, label=label)
+            end_label_used = True
+        previous_airborne = current_airborne
+    axes[8].set_ylabel("N")
+    axes[8].set_xlabel("time (s)")
 
     for axis in axes:
         axis.legend(loc="upper right")

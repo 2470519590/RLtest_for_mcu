@@ -1,4 +1,4 @@
-﻿"""LQR state and math helpers."""
+"""LQR state and math helpers."""
 
 from __future__ import annotations
 
@@ -201,15 +201,11 @@ def lqr_middle_control_from_state(
     lqr_tp_limit: float,
     lqr_x_outer_kp: float,
     lqr_x_outer_max_v: float,
-    velocity_only: bool = False,
 ) -> tuple[float, float, float, float]:
     x_velocity_reference = 0.0
     inner_x_error = state.x
     inner_x_rate_error = state.x_rate
-    if velocity_only:
-        inner_x_error = float(lqr_x0[2])
-        inner_x_rate_error = state.x_rate
-    elif lqr_x_outer_kp > 0.0:
+    if lqr_x_outer_kp > 0.0:
         position_error = state.x - float(lqr_x0[2])
         x_velocity_reference = float(
             np.clip(-lqr_x_outer_kp * position_error, -lqr_x_outer_max_v, lqr_x_outer_max_v)

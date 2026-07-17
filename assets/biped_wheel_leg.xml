@@ -46,6 +46,10 @@
     <material name="wheel_mat" rgba="0.02 0.02 0.02 1"/>
     <material name="motor_mat" rgba="0.18 0.18 0.20 1"/>
     <material name="front_mat" rgba="0.95 0.08 0.04 1"/>
+    <material name="carbon_mat" rgba="0.22 0.23 0.24 1"/>
+    <material name="green_cover_mat" rgba="0.00 0.80 0.12 1"/>
+    <material name="launcher_black_mat" rgba="0.04 0.04 0.04 1"/>
+    <material name="blue_rail_mat" rgba="0.05 0.12 0.95 1"/>
   </asset>
 
   <worldbody>
@@ -54,34 +58,50 @@
     <geom name="floor" type="plane" size="20 20 0.1" material="floor_mat" conaffinity="3"/>
     <body name="base" pos="0 0 0.72">
       <freejoint name="floating_base"/>
-      <inertial pos="0 0 0" mass="6.5" diaginertia="0.10 0.18 0.20"/>
-      <geom name="base_box" type="box" size="0.18 0.14 0.11" material="body_mat"/>
-      <geom name="battery_box" type="box" pos="0 0 0.12" size="0.12 0.09 0.035" material="body_mat"/>
-      <geom name="front_marker" type="sphere" pos="0.18 0 0.035" size="0.02" material="front_mat"/>
+      <inertial pos="0 0 -0.05" mass="7.6" diaginertia="0.072 0.108 0.148"/>
+      <geom name="base_box" type="box" pos="0 0 -0.05" size="0.18 0.14 0.06" material="body_mat"/>
+      <geom name="battery_box" type="box" pos="0 0 -0.015" size="0.12 0.09 0.025" material="body_mat"/>
+      <geom name="counterweight_box" class="visual_only" type="box" pos="-0.01 0 -0.134" size="0.165 0.125 0.024" material="motor_mat"/>
+      <geom name="launcher_left_plate" class="visual_only" type="box" pos="0.005 0.070 0.048" size="0.125 0.006 0.045" material="carbon_mat"/>
+      <geom name="launcher_right_plate" class="visual_only" type="box" pos="0.005 -0.070 0.048" size="0.125 0.006 0.045" material="carbon_mat"/>
+      <geom name="launcher_rear_plate" class="visual_only" type="box" pos="-0.120 0 0.048" size="0.006 0.070 0.045" material="carbon_mat"/>
+      <geom name="launcher_top_plate" class="visual_only" type="box" pos="-0.050 0 0.094" size="0.105 0.072 0.006" material="carbon_mat"/>
+      <geom name="launcher_green_cover" class="visual_only" type="box" pos="-0.010 0 0.084" size="0.072 0.056 0.012" material="green_cover_mat"/>
+      <geom name="launcher_black_body" class="visual_only" type="box" pos="0.072 0 0.060" size="0.055 0.050 0.030" material="launcher_black_mat"/>
+      <geom name="launcher_muzzle" class="visual_only" type="cylinder" pos="0.132 0 0.052" size="0.028 0.010" euler="0 1.57079632679 0" material="upper_mat"/>
+      <geom name="launcher_upper_roller" class="visual_only" type="cylinder" pos="0.102 0 0.083" size="0.014 0.050" euler="1.57079632679 0 0" material="launcher_black_mat"/>
+      <geom name="launcher_lower_roller" class="visual_only" type="cylinder" pos="0.102 0 0.030" size="0.014 0.050" euler="1.57079632679 0 0" material="launcher_black_mat"/>
+      <geom name="launcher_blue_rail" class="visual_only" type="box" pos="0.035 0 -0.005" size="0.095 0.010 0.006" material="blue_rail_mat"/>
+      <geom name="launcher_left_post" class="visual_only" type="box" pos="-0.100 0.055 0.035" size="0.010 0.006 0.060" material="carbon_mat"/>
+      <geom name="launcher_right_post" class="visual_only" type="box" pos="-0.100 -0.055 0.035" size="0.010 0.006 0.060" material="carbon_mat"/>
 
       <!-- Left five-bar leg. The two top joints are actuated; the two middle
            elbow joints are passive hinges; the lower links meet at the wheel carrier. -->
       <body name="left_front_upper" pos="0.06 0.17 -0.05">
         <joint name="left_front_drive" class="drive_joint"/>
         <geom name="left_front_motor_housing" class="visual_only" type="cylinder" pos="0 -0.018 0" size="0.032 0.012" euler="1.57079632679 0 0" material="motor_mat"/>
-        <geom name="left_front_upper_collision" class="link_collision" fromto="0 0 0 0.06 0 -0.18"/>
-        <geom name="left_front_upper_link" class="visual_only" type="box" fromto="0 0 0 0.06 0 -0.18" size="0.012 0.006 0.001" material="upper_mat"/>
+        <geom name="left_front_drive_spacer" class="visual_only" type="cylinder" pos="0 0.010 0" size="0.016 0.028" euler="1.57079632679 0 0" material="joint_mat" mass="0"/>
+        <geom name="left_front_upper_collision" class="link_collision" fromto="0 0.018 0 0.06 0.018 -0.18"/>
+        <geom name="left_front_upper_link" class="visual_only" type="box" fromto="0 0.018 0 0.06 0.018 -0.18" size="0.012 0.006 0.001" material="upper_mat"/>
         <body name="left_front_elbow" pos="0.06 0 -0.18">
           <joint name="left_front_elbow_joint" class="passive_joint"/>
           <geom name="left_front_elbow_collision" class="hidden_collision" type="sphere" size="0.026"/>
           <geom name="left_front_elbow_geom" class="visual_only" type="cylinder" size="0.024 0.014" euler="1.57079632679 0 0" material="joint_mat"/>
-          <geom name="left_front_lower_collision" class="link_collision" fromto="0 0 0 -0.105 0 -0.265"/>
-          <geom name="left_front_lower_link" class="visual_only" type="box" fromto="0 0 0 -0.105 0 -0.265" size="0.011 0.005 0.001" material="lower_mat"/>
+          <geom name="left_front_elbow_spacer" class="visual_only" type="cylinder" pos="0 0 0" size="0.014 0.036" euler="1.57079632679 0 0" material="joint_mat" mass="0"/>
+          <geom name="left_front_lower_collision" class="link_collision" fromto="0 -0.018 0 -0.105 -0.018 -0.265"/>
+          <geom name="left_front_lower_link" class="visual_only" type="box" fromto="0 -0.018 0 -0.105 -0.018 -0.265" size="0.011 0.005 0.001" material="lower_mat"/>
           <body name="left_front_hub" pos="-0.105 0 -0.265">
             <joint name="left_front_hub_joint" class="passive_joint"/>
             <geom name="left_front_hub_collision" class="hidden_collision" type="sphere" size="0.026"/>
             <geom name="left_front_hub_geom" class="visual_only" type="sphere" size="0.023" material="joint_mat"/>
+            <geom name="left_front_hub_spacer" class="visual_only" type="cylinder" pos="0 -0.009 0" size="0.014 0.018" euler="1.57079632679 0 0" material="joint_mat" mass="0"/>
           <body name="left_carrier" pos="0 0 0">
             <site name="left_carrier_front_site" pos="0 0 0" size="0.004"/>
             <site name="left_carrier_site" pos="0 0 0" size="0.004"/>
             <site name="left_carrier_rear_site" pos="0 0 0" size="0.004"/>
             <geom name="left_carrier_collision" class="hidden_collision" type="cylinder" size="0.018 0.035" euler="1.57079632679 0 0"/>
             <geom name="left_carrier_axle_geom" class="visual_only" type="cylinder" size="0.018 0.035" euler="1.57079632679 0 0" material="joint_mat"/>
+            <geom name="left_wheel_axle_extension" class="visual_only" type="cylinder" pos="0 0.046 0" size="0.017 0.012" euler="1.57079632679 0 0" material="joint_mat" mass="0"/>
             <body name="left_wheel" pos="0 0.085 0">
               <joint name="left_wheel_joint" class="wheel"/>
               <geom name="left_wheel_geom" type="cylinder" size="0.085 0.028" euler="1.57079632679 0 0" material="wheel_mat" mass="0.35"/>
@@ -93,17 +113,20 @@
       <body name="left_rear_upper" pos="-0.06 0.17 -0.05">
         <joint name="left_rear_drive" class="drive_joint"/>
         <geom name="left_rear_motor_housing" class="visual_only" type="cylinder" pos="0 -0.018 0" size="0.032 0.012" euler="1.57079632679 0 0" material="motor_mat"/>
-        <geom name="left_rear_upper_collision" class="link_collision" fromto="0 0 0 -0.06 0 -0.18"/>
-        <geom name="left_rear_upper_link" class="visual_only" type="box" fromto="0 0 0 -0.06 0 -0.18" size="0.012 0.006 0.001" material="upper_mat"/>
+        <geom name="left_rear_drive_spacer" class="visual_only" type="cylinder" pos="0 0.010 0" size="0.016 0.028" euler="1.57079632679 0 0" material="joint_mat" mass="0"/>
+        <geom name="left_rear_upper_collision" class="link_collision" fromto="0 0.018 0 -0.06 0.018 -0.18"/>
+        <geom name="left_rear_upper_link" class="visual_only" type="box" fromto="0 0.018 0 -0.06 0.018 -0.18" size="0.012 0.006 0.001" material="upper_mat"/>
         <body name="left_rear_elbow" pos="-0.06 0 -0.18">
           <joint name="left_rear_elbow_joint" class="passive_joint"/>
           <geom name="left_rear_elbow_collision" class="hidden_collision" type="sphere" size="0.026"/>
           <geom name="left_rear_elbow_geom" class="visual_only" type="cylinder" size="0.024 0.014" euler="1.57079632679 0 0" material="joint_mat"/>
+          <geom name="left_rear_elbow_spacer" class="visual_only" type="cylinder" pos="0 0 0" size="0.014 0.036" euler="1.57079632679 0 0" material="joint_mat" mass="0"/>
           <body name="left_rear_hub" pos="0.105 0 -0.265">
             <site name="left_rear_hub_site" pos="0 0 0" size="0.004"/>
             <geom name="left_rear_hub_collision" class="hidden_collision" type="sphere" size="0.026"/>
-            <geom name="left_rear_lower_collision" class="link_collision" fromto="0 0 0 -0.105 0 0.265"/>
-            <geom name="left_rear_lower_link" class="visual_only" type="box" fromto="0 0 0 -0.105 0 0.265" size="0.011 0.005 0.001" material="lower_mat"/>
+            <geom name="left_rear_hub_spacer" class="visual_only" type="cylinder" pos="0 -0.009 0" size="0.014 0.018" euler="1.57079632679 0 0" material="joint_mat" mass="0"/>
+            <geom name="left_rear_lower_collision" class="link_collision" fromto="0 -0.018 0 -0.105 -0.018 0.265"/>
+            <geom name="left_rear_lower_link" class="visual_only" type="box" fromto="0 -0.018 0 -0.105 -0.018 0.265" size="0.011 0.005 0.001" material="lower_mat"/>
             <geom name="left_rear_hub_marker" class="visual_only" type="sphere" size="0.023" material="joint_mat"/>
           </body>
         </body>
@@ -113,24 +136,28 @@
       <body name="right_front_upper" pos="0.06 -0.17 -0.05">
         <joint name="right_front_drive" class="drive_joint"/>
         <geom name="right_front_motor_housing" class="visual_only" type="cylinder" pos="0 0.018 0" size="0.032 0.012" euler="1.57079632679 0 0" material="motor_mat"/>
-        <geom name="right_front_upper_collision" class="link_collision" fromto="0 0 0 0.06 0 -0.18"/>
-        <geom name="right_front_upper_link" class="visual_only" type="box" fromto="0 0 0 0.06 0 -0.18" size="0.012 0.006 0.001" material="upper_mat"/>
+        <geom name="right_front_drive_spacer" class="visual_only" type="cylinder" pos="0 -0.010 0" size="0.016 0.028" euler="1.57079632679 0 0" material="joint_mat" mass="0"/>
+        <geom name="right_front_upper_collision" class="link_collision" fromto="0 -0.018 0 0.06 -0.018 -0.18"/>
+        <geom name="right_front_upper_link" class="visual_only" type="box" fromto="0 -0.018 0 0.06 -0.018 -0.18" size="0.012 0.006 0.001" material="upper_mat"/>
         <body name="right_front_elbow" pos="0.06 0 -0.18">
           <joint name="right_front_elbow_joint" class="passive_joint"/>
           <geom name="right_front_elbow_collision" class="hidden_collision" type="sphere" size="0.026"/>
           <geom name="right_front_elbow_geom" class="visual_only" type="cylinder" size="0.024 0.014" euler="1.57079632679 0 0" material="joint_mat"/>
-          <geom name="right_front_lower_collision" class="link_collision" fromto="0 0 0 -0.105 0 -0.265"/>
-          <geom name="right_front_lower_link" class="visual_only" type="box" fromto="0 0 0 -0.105 0 -0.265" size="0.011 0.005 0.001" material="lower_mat"/>
+          <geom name="right_front_elbow_spacer" class="visual_only" type="cylinder" pos="0 0 0" size="0.014 0.036" euler="1.57079632679 0 0" material="joint_mat" mass="0"/>
+          <geom name="right_front_lower_collision" class="link_collision" fromto="0 0.018 0 -0.105 0.018 -0.265"/>
+          <geom name="right_front_lower_link" class="visual_only" type="box" fromto="0 0.018 0 -0.105 0.018 -0.265" size="0.011 0.005 0.001" material="lower_mat"/>
           <body name="right_front_hub" pos="-0.105 0 -0.265">
             <joint name="right_front_hub_joint" class="passive_joint"/>
             <geom name="right_front_hub_collision" class="hidden_collision" type="sphere" size="0.026"/>
             <geom name="right_front_hub_geom" class="visual_only" type="sphere" size="0.023" material="joint_mat"/>
+            <geom name="right_front_hub_spacer" class="visual_only" type="cylinder" pos="0 0.009 0" size="0.014 0.018" euler="1.57079632679 0 0" material="joint_mat" mass="0"/>
           <body name="right_carrier" pos="0 0 0">
             <site name="right_carrier_front_site" pos="0 0 0" size="0.004"/>
             <site name="right_carrier_site" pos="0 0 0" size="0.004"/>
             <site name="right_carrier_rear_site" pos="0 0 0" size="0.004"/>
             <geom name="right_carrier_collision" class="hidden_collision" type="cylinder" size="0.018 0.035" euler="1.57079632679 0 0"/>
             <geom name="right_carrier_axle_geom" class="visual_only" type="cylinder" size="0.018 0.035" euler="1.57079632679 0 0" material="joint_mat"/>
+            <geom name="right_wheel_axle_extension" class="visual_only" type="cylinder" pos="0 -0.046 0" size="0.017 0.012" euler="1.57079632679 0 0" material="joint_mat" mass="0"/>
             <body name="right_wheel" pos="0 -0.085 0">
               <joint name="right_wheel_joint" class="wheel"/>
               <geom name="right_wheel_geom" type="cylinder" size="0.085 0.028" euler="1.57079632679 0 0" material="wheel_mat" mass="0.35"/>
@@ -142,17 +169,20 @@
       <body name="right_rear_upper" pos="-0.06 -0.17 -0.05">
         <joint name="right_rear_drive" class="drive_joint"/>
         <geom name="right_rear_motor_housing" class="visual_only" type="cylinder" pos="0 0.018 0" size="0.032 0.012" euler="1.57079632679 0 0" material="motor_mat"/>
-        <geom name="right_rear_upper_collision" class="link_collision" fromto="0 0 0 -0.06 0 -0.18"/>
-        <geom name="right_rear_upper_link" class="visual_only" type="box" fromto="0 0 0 -0.06 0 -0.18" size="0.012 0.006 0.001" material="upper_mat"/>
+        <geom name="right_rear_drive_spacer" class="visual_only" type="cylinder" pos="0 -0.010 0" size="0.016 0.028" euler="1.57079632679 0 0" material="joint_mat" mass="0"/>
+        <geom name="right_rear_upper_collision" class="link_collision" fromto="0 -0.018 0 -0.06 -0.018 -0.18"/>
+        <geom name="right_rear_upper_link" class="visual_only" type="box" fromto="0 -0.018 0 -0.06 -0.018 -0.18" size="0.012 0.006 0.001" material="upper_mat"/>
         <body name="right_rear_elbow" pos="-0.06 0 -0.18">
           <joint name="right_rear_elbow_joint" class="passive_joint"/>
           <geom name="right_rear_elbow_collision" class="hidden_collision" type="sphere" size="0.026"/>
           <geom name="right_rear_elbow_geom" class="visual_only" type="cylinder" size="0.024 0.014" euler="1.57079632679 0 0" material="joint_mat"/>
+          <geom name="right_rear_elbow_spacer" class="visual_only" type="cylinder" pos="0 0 0" size="0.014 0.036" euler="1.57079632679 0 0" material="joint_mat" mass="0"/>
           <body name="right_rear_hub" pos="0.105 0 -0.265">
             <site name="right_rear_hub_site" pos="0 0 0" size="0.004"/>
             <geom name="right_rear_hub_collision" class="hidden_collision" type="sphere" size="0.026"/>
-            <geom name="right_rear_lower_collision" class="link_collision" fromto="0 0 0 -0.105 0 0.265"/>
-            <geom name="right_rear_lower_link" class="visual_only" type="box" fromto="0 0 0 -0.105 0 0.265" size="0.011 0.005 0.001" material="lower_mat"/>
+            <geom name="right_rear_hub_spacer" class="visual_only" type="cylinder" pos="0 0.009 0" size="0.014 0.018" euler="1.57079632679 0 0" material="joint_mat" mass="0"/>
+            <geom name="right_rear_lower_collision" class="link_collision" fromto="0 0.018 0 -0.105 0.018 0.265"/>
+            <geom name="right_rear_lower_link" class="visual_only" type="box" fromto="0 0.018 0 -0.105 0.018 0.265" size="0.011 0.005 0.001" material="lower_mat"/>
             <geom name="right_rear_hub_marker" class="visual_only" type="sphere" size="0.023" material="joint_mat"/>
           </body>
         </body>
