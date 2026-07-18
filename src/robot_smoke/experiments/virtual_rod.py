@@ -340,12 +340,18 @@ def _run_virtual_rod_test(
     runtime_controls: RuntimeControlConfig | None = None,
     residual_rl_policy: ResidualRlPolicy | None = None,
     time_offset_s: float = 0.0,
+    rollout_context: dict[str, object] | None = None,
+    reuse_initial_data: bool = False,
+    copy_final_data: bool = True,
+    control_decimation_steps: int = 1,
+    fast_result: bool = False,
     on_initialized: Callable[[object], Callable[..., bool] | None] | None = None,
 ) -> VirtualRodResult:
     if runtime_controls is None:
         raise ValueError("runtime_controls must be provided by the YAML-backed runner")
+    control_decimation_steps = max(1, int(control_decimation_steps))
     if initial_data is not None:
-        data = _copy_data(mujoco, model, initial_data)
+        data = initial_data if reuse_initial_data else _copy_data(mujoco, model, initial_data)
     else:
         data = mujoco.MjData(model)
         mujoco.mj_resetData(model, data)
@@ -432,6 +438,54 @@ def _run_virtual_rod_test(
     jump_extension_start_time: float | None = None
     jump_crouch_leg_length = max(0.18, minimum_leg_length)
     previous_step_virtual_rod_control = virtual_rod_control
+    if rollout_context is not None:
+        previous_wheel_torque = float(rollout_context.get("previous_wheel_torque", previous_wheel_torque))
+        previous_pitch_torque = float(rollout_context.get("previous_pitch_torque", previous_pitch_torque))
+        previous_yaw_error = float(rollout_context.get("previous_yaw_error", previous_yaw_error))
+        previous_raw_yaw_error = float(rollout_context.get("previous_raw_yaw_error", previous_raw_yaw_error))
+        filtered_yaw_rate = float(rollout_context.get("filtered_yaw_rate", filtered_yaw_rate))
+        filtered_yaw_error = float(rollout_context.get("filtered_yaw_error", filtered_yaw_error))
+        filtered_yaw_error_rate = float(rollout_context.get("filtered_yaw_error_rate", filtered_yaw_error_rate))
+        filtered_sync_error = float(rollout_context.get("filtered_sync_error", filtered_sync_error))
+        filtered_sync_error_rate = float(rollout_context.get("filtered_sync_error_rate", filtered_sync_error_rate))
+        filtered_left_theta = float(rollout_context.get("filtered_left_theta", filtered_left_theta))
+        filtered_right_theta = float(rollout_context.get("filtered_right_theta", filtered_right_theta))
+        raw_yaw_error_rate = float(rollout_context.get("raw_yaw_error_rate", raw_yaw_error_rate))
+        yaw_error_rate = float(rollout_context.get("yaw_error_rate", yaw_error_rate))
+        yaw_p_torque = float(rollout_context.get("yaw_p_torque", yaw_p_torque))
+        yaw_d_torque = float(rollout_context.get("yaw_d_torque", yaw_d_torque))
+        raw_sync_error = float(rollout_context.get("raw_sync_error", raw_sync_error))
+        raw_sync_error_rate = float(rollout_context.get("raw_sync_error_rate", raw_sync_error_rate))
+        sync_p_torque = float(rollout_context.get("sync_p_torque", sync_p_torque))
+        sync_d_torque = float(rollout_context.get("sync_d_torque", sync_d_torque))
+        yaw_rate_reference = float(rollout_context.get("yaw_rate_reference", yaw_rate_reference))
+        turn_torque = float(rollout_context.get("turn_torque", turn_torque))
+        left_wheel_torque = float(rollout_context.get("left_wheel_torque", left_wheel_torque))
+        right_wheel_torque = float(rollout_context.get("right_wheel_torque", right_wheel_torque))
+        length_force_delta = float(rollout_context.get("length_force_delta", length_force_delta))
+        residual_action = rollout_context.get("residual_action", residual_action)  # type: ignore[assignment]
+        x_velocity_reference = float(rollout_context.get("x_velocity_reference", x_velocity_reference))
+        ik_target_cache = rollout_context.setdefault("ik_target_cache", ik_target_cache)  # type: ignore[assignment]
+        vmc_memory = rollout_context.setdefault("vmc_memory", vmc_memory)  # type: ignore[assignment]
+        vmc_diagnostics = rollout_context.setdefault("vmc_diagnostics", vmc_diagnostics)  # type: ignore[assignment]
+        odometry = rollout_context.setdefault("odometry", odometry)  # type: ignore[assignment]
+        contact_detection_armed = bool(rollout_context.get("contact_detection_armed", contact_detection_armed))
+        was_airborne = bool(rollout_context.get("was_airborne", was_airborne))
+        landing_phase = str(rollout_context.get("landing_phase", landing_phase))
+        landing_hold_active = bool(rollout_context.get("landing_hold_active", landing_hold_active))
+        landing_hold_stable_time = float(rollout_context.get("landing_hold_stable_time", landing_hold_stable_time))
+        raw_airborne_start_time = rollout_context.get("raw_airborne_start_time", raw_airborne_start_time)  # type: ignore[assignment]
+        airborne_rearm_time = float(rollout_context.get("airborne_rearm_time", airborne_rearm_time))
+        suppress_speed_profile_after_airborne = bool(
+            rollout_context.get("suppress_speed_profile_after_airborne", suppress_speed_profile_after_airborne)
+        )
+        jump_started = bool(rollout_context.get("jump_started", jump_started))
+        active_jump_time_s = float(rollout_context.get("active_jump_time_s", active_jump_time_s))
+        jump_extension_start_time = rollout_context.get("jump_extension_start_time", jump_extension_start_time)  # type: ignore[assignment]
+        jump_crouch_leg_length = float(rollout_context.get("jump_crouch_leg_length", jump_crouch_leg_length))
+        previous_step_virtual_rod_control = str(
+            rollout_context.get("previous_step_virtual_rod_control", previous_step_virtual_rod_control)
+        )
     startup_steps = int(math.ceil(startup_ramp_seconds / float(model.opt.timestep))) if startup_ramp_seconds > 0.0 else 0
     task_duration_s = max(0.0, time_offset_s + steps * float(model.opt.timestep) - startup_ramp_seconds)
     if jump_test:
@@ -450,6 +504,14 @@ def _run_virtual_rod_test(
     step_observer = on_initialized(data) if on_initialized is not None else None
     for step in range(steps):
         time_s = time_offset_s + step * float(model.opt.timestep)
+        if step % control_decimation_steps != 0:
+            mujoco.mj_step(model, data)
+            executed_steps = step + 1
+            if model.nq >= 3:
+                max_base_height = max(max_base_height, float(data.qpos[2]))
+            if step_observer is not None and not step_observer(data, executed_steps, landing_phase):
+                break
+            continue
         left_contact_force = _contact_normal_force_for_wheel(mujoco, model, data, "left")
         right_contact_force = _contact_normal_force_for_wheel(mujoco, model, data, "right")
         if left_contact_force >= flight_airborne_force_threshold or right_contact_force >= flight_airborne_force_threshold:
@@ -913,10 +975,11 @@ def _run_virtual_rod_test(
         max_abs_ctrl = max(max_abs_ctrl, ctrl_abs)
         max_length_error = max(max_length_error, length_error)
         max_theta_error = max(max_theta_error, theta_error)
-        left_branch = _compute_leg_branch_metrics(mujoco, model, data, "left")
-        right_branch = _compute_leg_branch_metrics(mujoco, model, data, "right")
-        max_left_branch_violation = max(max_left_branch_violation, left_branch.violation)
-        max_right_branch_violation = max(max_right_branch_violation, right_branch.violation)
+        if not fast_result:
+            left_branch = _compute_leg_branch_metrics(mujoco, model, data, "left")
+            right_branch = _compute_leg_branch_metrics(mujoco, model, data, "right")
+            max_left_branch_violation = max(max_left_branch_violation, left_branch.violation)
+            max_right_branch_violation = max(max_right_branch_violation, right_branch.violation)
         if saturated:
             saturated_steps += 1
         min_ctrl = np.minimum(min_ctrl, data.ctrl)
@@ -931,12 +994,13 @@ def _run_virtual_rod_test(
         executed_steps = step + 1
         if model.nq >= 3:
             max_base_height = max(max_base_height, float(data.qpos[2]))
-        _assert_finite("qpos", data.qpos)
-        _assert_finite("qvel", data.qvel)
-        left_wheel_speed, right_wheel_speed = _wheel_speeds(mujoco, model, data)
-        max_abs_left_wheel_speed = max(max_abs_left_wheel_speed, abs(left_wheel_speed))
-        max_abs_right_wheel_speed = max(max_abs_right_wheel_speed, abs(right_wheel_speed))
-        if lqr_test and (step % history_sample_interval == 0 or step == steps - 1):
+        if not fast_result:
+            _assert_finite("qpos", data.qpos)
+            _assert_finite("qvel", data.qvel)
+            left_wheel_speed, right_wheel_speed = _wheel_speeds(mujoco, model, data)
+            max_abs_left_wheel_speed = max(max_abs_left_wheel_speed, abs(left_wheel_speed))
+            max_abs_right_wheel_speed = max(max_abs_right_wheel_speed, abs(right_wheel_speed))
+        if not fast_result and lqr_test and (step % history_sample_interval == 0 or step == steps - 1):
             history.append(
                 _collect_lqr_history_sample(
                     mujoco,
@@ -986,19 +1050,24 @@ def _run_virtual_rod_test(
     left_state = _compute_virtual_leg_state(mujoco, model, data, "left")
     right_state = _compute_virtual_leg_state(mujoco, model, data, "right")
     final_left_wheel_speed, final_right_wheel_speed = _wheel_speeds(mujoco, model, data)
-    left_branch = _compute_leg_branch_metrics(mujoco, model, data, "left")
-    right_branch = _compute_leg_branch_metrics(mujoco, model, data, "right")
-    final_operating_point = _collect_static_operating_point_sample(
-        mujoco,
-        model,
-        data,
-        "final_virtual_rod_state",
-        previous_wheel_torque,
-        previous_pitch_torque,
-        x_source=lqr_x_source,
-        left_diag=vmc_diagnostics.get("left"),
-        right_diag=vmc_diagnostics.get("right"),
-    )
+    if fast_result:
+        left_branch = None
+        right_branch = None
+        final_operating_point = None
+    else:
+        left_branch = _compute_leg_branch_metrics(mujoco, model, data, "left")
+        right_branch = _compute_leg_branch_metrics(mujoco, model, data, "right")
+        final_operating_point = _collect_static_operating_point_sample(
+            mujoco,
+            model,
+            data,
+            "final_virtual_rod_state",
+            previous_wheel_torque,
+            previous_pitch_torque,
+            x_source=lqr_x_source,
+            left_diag=vmc_diagnostics.get("left"),
+            right_diag=vmc_diagnostics.get("right"),
+        )
     actuator_ctrl_stats = tuple(
         ActuatorCtrlStats(
             actuator=_name(mujoco, model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_id),
@@ -1009,6 +1078,48 @@ def _run_virtual_rod_test(
         )
         for actuator_id in range(model.nu)
     )
+    if rollout_context is not None:
+        rollout_context.update(
+            previous_wheel_torque=previous_wheel_torque,
+            previous_pitch_torque=previous_pitch_torque,
+            previous_yaw_error=previous_yaw_error,
+            previous_raw_yaw_error=previous_raw_yaw_error,
+            filtered_yaw_rate=filtered_yaw_rate,
+            filtered_yaw_error=filtered_yaw_error,
+            filtered_yaw_error_rate=filtered_yaw_error_rate,
+            filtered_sync_error=filtered_sync_error,
+            filtered_sync_error_rate=filtered_sync_error_rate,
+            filtered_left_theta=filtered_left_theta,
+            filtered_right_theta=filtered_right_theta,
+            raw_yaw_error_rate=raw_yaw_error_rate,
+            yaw_error_rate=yaw_error_rate,
+            yaw_p_torque=yaw_p_torque,
+            yaw_d_torque=yaw_d_torque,
+            raw_sync_error=raw_sync_error,
+            raw_sync_error_rate=raw_sync_error_rate,
+            sync_p_torque=sync_p_torque,
+            sync_d_torque=sync_d_torque,
+            yaw_rate_reference=yaw_rate_reference,
+            turn_torque=turn_torque,
+            left_wheel_torque=left_wheel_torque,
+            right_wheel_torque=right_wheel_torque,
+            length_force_delta=length_force_delta,
+            residual_action=residual_action,
+            x_velocity_reference=x_velocity_reference,
+            contact_detection_armed=contact_detection_armed,
+            was_airborne=was_airborne,
+            landing_phase=landing_phase,
+            landing_hold_active=landing_hold_active,
+            landing_hold_stable_time=landing_hold_stable_time,
+            raw_airborne_start_time=raw_airborne_start_time,
+            airborne_rearm_time=airborne_rearm_time,
+            suppress_speed_profile_after_airborne=suppress_speed_profile_after_airborne,
+            jump_started=jump_started,
+            active_jump_time_s=active_jump_time_s,
+            jump_extension_start_time=jump_extension_start_time,
+            jump_crouch_leg_length=jump_crouch_leg_length,
+            previous_step_virtual_rod_control=previous_step_virtual_rod_control,
+        )
     return VirtualRodResult(
         steps=executed_steps,
         lock_base=lock_base,
@@ -1024,8 +1135,8 @@ def _run_virtual_rod_test(
         max_theta_error=max_theta_error,
         max_left_branch_violation=max_left_branch_violation,
         max_right_branch_violation=max_right_branch_violation,
-        final_left_branch_violation=left_branch.violation,
-        final_right_branch_violation=right_branch.violation,
+        final_left_branch_violation=0.0 if left_branch is None else left_branch.violation,
+        final_right_branch_violation=0.0 if right_branch is None else right_branch.violation,
         max_abs_ctrl=max_abs_ctrl,
         saturated_steps=saturated_steps,
         actuator_ctrl_stats=actuator_ctrl_stats,
@@ -1045,7 +1156,7 @@ def _run_virtual_rod_test(
         first_airborne_time=first_airborne_time,
         last_airborne_time=last_airborne_time,
         final_operating_point=final_operating_point,
-        final_data=_copy_data(mujoco, model, data),
+        final_data=_copy_data(mujoco, model, data) if copy_final_data else data,
     )
 
 

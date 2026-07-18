@@ -7,6 +7,7 @@ import math
 import numpy as np
 
 from ..core.mujoco_utils import body_pos_vel as _body_pos_vel
+from ..core.mujoco_utils import body_linear_velocity as _body_linear_velocity
 from ..core.mujoco_utils import id_by_name as _id_by_name
 from ..core.mujoco_utils import site_pos as _site_pos
 from ..core.mujoco_utils import site_pos_vel as _site_pos_vel
@@ -109,10 +110,7 @@ def wheel_center_forward_speed(mujoco, model, data) -> float:
     velocity = np.zeros(3, dtype=float)
     for body_name in ("left_wheel", "right_wheel"):
         body_id = _id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, body_name)
-        jacp = np.zeros((3, model.nv))
-        jacr = np.zeros((3, model.nv))
-        mujoco.mj_jacBody(model, data, jacp, jacr, body_id)
-        velocity += jacp @ data.qvel
+        velocity += _body_linear_velocity(mujoco, model, data, body_id)
     return float(np.dot(0.5 * velocity, heading))
 
 

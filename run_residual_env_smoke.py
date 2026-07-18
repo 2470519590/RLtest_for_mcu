@@ -17,6 +17,12 @@ def main() -> int:
     parser.add_argument("--steps", type=int, default=5)
     parser.add_argument("--episode-seconds", type=float, default=0.2)
     parser.add_argument("--step-seconds", type=float, default=0.01)
+    parser.add_argument(
+        "--control-decimation-steps",
+        type=int,
+        default=None,
+        help="MuJoCo substeps between Python controller updates; default matches --step-seconds",
+    )
     parser.add_argument("--controller-mode", choices=RL_CONTROLLER_MODES, default="lqr_residual")
     parser.add_argument(
         "--compare-zero-residual",
@@ -44,6 +50,7 @@ def main() -> int:
         args.task_key,
         episode_seconds=args.episode_seconds,
         step_seconds=args.step_seconds,
+        control_decimation_steps=args.control_decimation_steps,
         action_limits=DEFAULT_ACTION_LIMITS,
         controller_mode=args.controller_mode,
     )
@@ -91,6 +98,7 @@ def _compare_zero_residual(args: argparse.Namespace) -> int:
             args.task_key,
             episode_seconds=args.episode_seconds,
             step_seconds=args.step_seconds,
+            control_decimation_steps=args.control_decimation_steps,
             action_limits=DEFAULT_ACTION_LIMITS,
             controller_mode=mode,
         )

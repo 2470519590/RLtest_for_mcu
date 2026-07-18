@@ -13,6 +13,9 @@
 - `src/robot_smoke/`：模型、控制、实验和绘图代码。
 - `docs/CONTROL_THEORY.md`：当前有效控制公式和物理语义。
 - `tasks/CONTROL_FRAMEWORK.md`：同一控制框架下的实验记录。
+- `RL说明.md`：Residual RL Env、任务清单、PPO 训练和本地验证命令。
+- `run_residual_env_smoke.py`：Residual RL Env smoke / 可视化 / 零残差对照入口。
+- `run_train_residual_ppo.py`：最小 Stable-Baselines3 PPO 训练入口，输出默认写入忽略目录 `runs/`。
 
 ## 环境
 
@@ -104,6 +107,8 @@ Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
 ```powershell
 Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
 & 'E:\miniconda\envs\py310\python.exe' run_smoke.py --flight-test --visualize --visualize-seconds 10 --lqr-debug-plot
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --flight-test --flight-test-speed medium --visualize --visualize-seconds 10 --lqr-debug-plot
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --flight-test --flight-test-speed high --visualize --visualize-seconds 10 --lqr-debug-plot
 ```
 
 ### 斜坡 ROLL 原地旋转测试
@@ -165,6 +170,46 @@ LQR 调试图：
 
 图片默认输出到 `output\HHMMSS.png`。
 
+## Residual RL / PPO 当前入口
+
+当前已有最小 residual RL 训练原型，但它仍服务于本地验证和服务器训练交接，不表示飞坡、跳跃或落地行为已经合格。
+
+训练任务只保留 5 个 key：
+
+- `forward_jump_medium`
+- `forward_jump_high`
+- `flight_ramp_medium`
+- `flight_ramp_high`
+- `inplace_jump`
+
+低速飞坡和低速带速度跳不作为 RL 训练任务，因为低速场景会先绊倒，不能提供有效起跳/落地样本。
+
+Env smoke：
+
+```powershell
+& 'E:\miniconda\envs\py310\python.exe' run_residual_env_smoke.py --task-key flight_ramp_medium --steps 3 --episode-seconds 10 --step-seconds 0.02
+```
+
+零残差对照：
+
+```powershell
+& 'E:\miniconda\envs\py310\python.exe' run_residual_env_smoke.py --task-key flight_ramp_medium --compare-zero-residual --episode-seconds 10 --visualize-seconds 10 --step-seconds 0.02
+```
+
+本地单回合测速：
+
+```powershell
+Measure-Command { & 'E:\miniconda\envs\py310\python.exe' run_residual_env_smoke.py --task-key flight_ramp_medium --controller-mode lqr_residual --steps 500 --episode-seconds 10 --step-seconds 0.02 --action 0 0 0 0 0 | Out-Null }
+```
+
+短 PPO 连通性检查：
+
+```powershell
+& 'E:\miniconda\envs\py310\python.exe' run_train_residual_ppo.py --tasks flight_ramp_medium --total-timesteps 500 --n-envs 1 --n-steps 500 --batch-size 250 --episode-sim-seconds 10 --step-seconds 0.02 --run-name local_single_episode_50hz_speed_check --device cpu
+```
+
+`--episode-sim-seconds 10` 是 MuJoCo 仿真时间，不能为了训练速度裁剪成 2 秒；训练加速应来自 headless、并行 Env 和降低策略/控制更新频率。`--step-seconds 0.02` 表示 50 Hz policy/controller 更新，MuJoCo 仍推进完整 10000 个 1 ms 物理步。
+
 ## 脚本规则
 
 - 根目录 `.py` 只保留可直接运行入口。
@@ -174,6 +219,6 @@ LQR 调试图：
 - 控制公式、稳定物理量定义和当前有效物理语义写入 `docs/CONTROL_THEORY.md`。
 - 涉及机器人动作的判断必须优先给出可视化命令，由 viewer 人工确认。
 
-## 远期训练交接
+## 训练交接状态
 
-当前阶段不做服务器训练。等本地模型、底层控制和实验接口稳定后，再单独整理训练代码、配置和结果转换流程。
+当前已有最小 PPO/Env 入口，可以用于服务器并行训练前的连通性验证。仓库仍不是完整工程化训练平台：日志、checkpoint、tensorboard、wandb、临时输出和训练结果不进仓库；训练结果后续再下载到本地并转换为 ONNX 做 MuJoCo 可视化验证。

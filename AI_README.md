@@ -1,6 +1,6 @@
 # AI_README.md
 
-本仓库使用轻量 AI 协作流程。当前不是完整工程化训练平台，而是 MuJoCo 机器人实验脚本阶段。
+本仓库使用轻量 AI 协作流程。当前不是完整工程化训练平台，而是 MuJoCo 机器人实验脚本阶段；仓库里已经有最小 residual RL Env 和 PPO 入口，用于本地 smoke、服务器训练连通性检查和后续 ONNX 交接。
 
 AI 的主要任务是帮助：
 
@@ -68,9 +68,11 @@ LQR 不能用来补偿底层物理语义错误。
 
 只保留轻量规则：
 
-- 只有当本地准备都完成、只差正式训练时，才整理单独训练文件夹。
+- `server_training/` 保存最小 Env、任务清单和 PPO 入口；不要把它扩成臃肿平台。
+- 训练任务以 `server_training/residual_rl_tasks.yaml` 为准，当前只包含 `forward_jump_medium/high`、`flight_ramp_medium/high`、`inplace_jump`。
+- episode 时长必须使用任务文档中的完整 MuJoCo 仿真时间；不要为了提速裁剪任务。提速应通过 headless、并行 Env 和策略/控制更新频率实现。
 - 服务器训练完成后，用户会下载训练结果压缩包到本地结果文件夹。
 - 后续需要本地脚本把结果转成 ONNX。
 - 再用 ONNX 在本地 MuJoCo 可视化测试小车。
 
-当前阶段不要提前写复杂服务器训练流程。
+当前阶段不要提前写复杂服务器训练流程，也不要把训练日志、checkpoint、tensorboard、wandb 或临时输出提交进仓库。

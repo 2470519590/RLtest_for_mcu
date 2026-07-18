@@ -11,7 +11,7 @@
 - `tasks/`：只保留大任务记录；同类小实验更新同一个任务文件。
 - `templates/`：轻量任务模板。
 - `prompts/`：轻量提示词。
-- `server_training/`：服务器 residual RL 任务清单；当前只放训练配置语义，不放 checkpoint 或日志。
+- `server_training/`：最小 residual RL Env、任务清单和 PPO 训练入口；不放 checkpoint、日志或大体积训练输出。
 
 以后需要时再新增：
 
@@ -28,7 +28,8 @@
 - `tasks/CONTROL_FRAMEWORK.md`：当前控制框架大任务记录。后续同类小实验不要新建零散任务文件。
 - `RL说明.md`：residual RL 多任务接口、任务时间和服务器训练指令。
 - `server_training/residual_rl_tasks.yaml`：服务器训练任务 key、速度档和入口参数清单。
-- `server_training/residual_env.py`：最小 residual RL Env 原型，复用现有 MuJoCo smoke rollout。
+- `server_training/residual_env.py`：最小 residual RL Env，支持任务条件、零残差对照和训练用 headless rollout。
+- `server_training/train_residual_ppo.py`：Stable-Baselines3 PPO 训练实现。
 - `run_residual_env_smoke.py`：根目录可直接运行的最小 Env smoke 入口。
 - `run_train_residual_ppo.py`：根目录可直接运行的 residual PPO 训练入口，输出默认写入 `runs/`。
 
@@ -44,8 +45,10 @@
 ## 当前已知入口
 
 - `run_smoke.py`
+- `run_residual_env_smoke.py`
+- `run_train_residual_ppo.py`
 
-当前还没有正式 PPO/SAC 训练代码；已有 residual RL 控制接口和服务器任务清单。
+当前已有最小 PPO 训练入口，但仍属于轻量原型，不是完整训练平台。训练任务以 `server_training/residual_rl_tasks.yaml` 为准，当前为 5 个 key：`forward_jump_medium/high`、`flight_ramp_medium/high`、`inplace_jump`。
 
 ## 代码分包
 

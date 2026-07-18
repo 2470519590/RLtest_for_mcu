@@ -25,6 +25,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="full task horizon in MuJoCo simulation seconds; training runs headless/as-fast-as-possible",
     )
     parser.add_argument("--step-seconds", type=float, default=0.01)
+    parser.add_argument(
+        "--control-decimation-steps",
+        type=int,
+        default=None,
+        help="MuJoCo substeps between Python controller updates; default matches --step-seconds",
+    )
     parser.add_argument("--n-steps", type=int, default=64)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
@@ -55,12 +61,19 @@ def selected_task_keys(value: str) -> list[str]:
     return keys
 
 
-def _make_env(task_key: str, seed: int, episode_seconds: float, step_seconds: float):
+def _make_env(
+    task_key: str,
+    seed: int,
+    episode_seconds: float,
+    step_seconds: float,
+    control_decimation_steps: int | None,
+):
     def factory():
         env = ResidualCommandEnv(
             task_key,
             episode_seconds=episode_seconds,
             step_seconds=step_seconds,
+            control_decimation_steps=control_decimation_steps,
             action_limits=DEFAULT_ACTION_LIMITS,
             controller_mode="lqr_residual",
         )
@@ -108,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         seed = args.seed + index
 
         def wrapped_factory(task_key=task_key, seed=seed):
-            return _make_env(task_key, seed, args.episode_seconds, args.step_seconds)()
+            return _make_env(task_key, seed, args.episode_seconds, args.step_seconds, args.control_decimation_steps)()
 
         env_fns.append(wrapped_factory)
 

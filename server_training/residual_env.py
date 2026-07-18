@@ -264,6 +264,7 @@ class ResidualCommandEnv(gym.Env if gym is not None else object):
         step_seconds: float = 0.01,
         action_limits: tuple[float, float, float, float, float] = DEFAULT_ACTION_LIMITS,
         controller_mode: str = "lqr_residual",
+        control_decimation_steps: int | None = None,
     ) -> None:
         self.tasks = load_residual_tasks()
         if task_key not in self.tasks:
@@ -296,6 +297,11 @@ class ResidualCommandEnv(gym.Env if gym is not None else object):
         else:
             self.model = self.mujoco.MjModel.from_xml_path(str(self.config.model_path))
         self.step_mujoco_steps = max(1, int(round(self.step_seconds / float(self.model.opt.timestep))))
+        self.control_decimation_steps = (
+            self.step_mujoco_steps
+            if control_decimation_steps is None
+            else max(1, int(control_decimation_steps))
+        )
         self.left_target, self.right_target = _build_virtual_rod_targets(
             self.mujoco,
             self.model,
@@ -318,12 +324,14 @@ class ResidualCommandEnv(gym.Env if gym is not None else object):
         self._data = None
         self._time_s = 0.0
         self._last_obs = np.zeros(OBSERVATION_SIZE, dtype=np.float32)
+        self._rollout_context: dict[str, object] = {}
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         if gym is not None:
             super().reset(seed=seed)
         del options
         self._time_s = 0.0
+        self._rollout_context = {}
         self._data = _scheduled_initial_pose(
             self.mujoco,
             self.model,
@@ -451,6 +459,11 @@ class ResidualCommandEnv(gym.Env if gym is not None else object):
             runtime_controls=self.runtime_controls,
             residual_rl_policy=_ConstantResidualPolicy(action, self.action_limits),
             time_offset_s=self._time_s,
+            rollout_context=self._rollout_context,
+            reuse_initial_data=True,
+            copy_final_data=False,
+            control_decimation_steps=self.control_decimation_steps,
+            fast_result=True,
             on_initialized=on_initialized,
         )
 

@@ -81,14 +81,15 @@ Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
 
 每完成一段调试，必须给出一条用户可直接本地运行的命令。涉及机器人运动判断时，必须给出可视化命令，让用户看画面后反馈。
 
-## 以后服务器训练
+## 服务器训练
 
-当前不做服务器训练。等本地都准备好、只差正式训练时：
+当前已有最小 residual RL Env 和 PPO 入口，但仍保持轻量：
 
-- 单独文件夹放训练需要的代码和配置。
-- 服务器训练完成后产出压缩包。
-- 本地下载压缩包到结果文件夹。
-- 本地脚本转换为 ONNX。
-- 用 ONNX 在 MuJoCo 里可视化测试小车。
+- 训练入口、Env 和任务清单放在 `server_training/`。
+- 根目录只保留可直接运行入口，例如 `run_residual_env_smoke.py` 和 `run_train_residual_ppo.py`。
+- episode 时长按任务完整 MuJoCo 仿真时间设置，不能为了提速裁剪任务。
+- 提速优先通过 headless、并行 Env、策略/控制更新频率和必要的训练路径缓存实现。
+- 服务器训练完成后产出压缩包，本地下载到结果文件夹。
+- 后续本地脚本转换为 ONNX，再用 ONNX 在 MuJoCo 里可视化测试小车。
 
-不要提前加入完整工程化流程。
+不要把最小训练入口扩成复杂工程化平台；训练日志、checkpoint、tensorboard、wandb 和大体积输出不进仓库。

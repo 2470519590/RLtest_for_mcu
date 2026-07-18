@@ -41,8 +41,14 @@
 │  └─ runner.py                    # run_smoke.py 的实际编排
 ├─ tasks/
 │  └─ CONTROL_FRAMEWORK.md         # 当前控制框架任务记录
+├─ server_training/
+│  ├─ residual_rl_tasks.yaml       # 5 个 residual RL 任务 key
+│  ├─ residual_env.py              # Gymnasium-style residual Env
+│  └─ train_residual_ppo.py        # Stable-Baselines3 PPO 实现
 ├─ analyze_length_workpoints.py    # 多腿长工作点/调度表分析入口
 ├─ run_smoke.py                    # 本地仿真主入口
+├─ run_residual_env_smoke.py       # Env smoke / 可视化 / 零残差对照入口
+├─ run_train_residual_ppo.py       # PPO 训练入口
 └─ RL说明.md                       # 本文件
 ```
 
@@ -192,35 +198,45 @@ delta_L_ref_right
 - forward jump：`medium / high`，共用 jump、airborne、landing 策略；`low` 低速带速度跳不作为训练任务。
 - flight ramp：`medium / high`，只训练空中姿态和落地平衡；`low` 低速飞坡不作为训练任务。
 - inplace jump：原地起跳、空中姿态、落地平衡。
-- landing 策略共用，但 landing command 分为 `quick_stop` 和 `keep_speed`。
+- landing 策略共用；当前任务文件中 `inplace_jump` 标记为 `quick_stop`，带速度的跳跃和飞坡标记为 `keep_speed`。
 
 服务器训练方向：Gymnasium-style env + Stable-Baselines3 PPO；训练产物、日志、checkpoint 不进仓库。完成训练后导出 ONNX，再单独做本地 MuJoCo 可视化验证。
 
-当前最小 Env 原型入口：
+当前最小 Env / smoke 入口：
 
 ```powershell
-& 'E:\miniconda\envs\py310\python.exe' run_residual_env_smoke.py --task-key inplace_jump --steps 5
+& 'E:\miniconda\envs\py310\python.exe' run_residual_env_smoke.py --task-key inplace_jump --steps 5 --episode-seconds 10 --step-seconds 0.02
 & 'E:\miniconda\envs\py310\python.exe' run_residual_env_smoke.py --task-key inplace_jump --controller-mode lqr --visualize --visualize-seconds 5
 & 'E:\miniconda\envs\py310\python.exe' run_residual_env_smoke.py --task-key inplace_jump --controller-mode lqr_residual --visualize --visualize-seconds 5 --action 0.2 0.1 0.0 0.1 -0.1
 & 'E:\miniconda\envs\py310\python.exe' run_residual_env_smoke.py --task-key flight_ramp_medium --controller-mode lqr --visualize --visualize-seconds 8 --viewer-sync-hz 20
-& 'E:\miniconda\envs\py310\python.exe' run_residual_env_smoke.py --task-key flight_ramp_medium --compare-zero-residual --visualize-seconds 8
+& 'E:\miniconda\envs\py310\python.exe' run_residual_env_smoke.py --task-key flight_ramp_medium --compare-zero-residual --episode-seconds 10 --visualize-seconds 10 --step-seconds 0.02
 ```
 
-`--task-key` 使用 `server_training/residual_rl_tasks.yaml` 内的 5 个训练 key。`--action` 是归一化 residual 测试动作，顺序为 `[delta_T, delta_Tp, delta_F_l_common, delta_L_ref_left, delta_L_ref_right]`，每个值在 `[-1,1]` 内，再由 Env 内部固定限幅缩放到真实单位。`--controller-mode lqr` 用来对照原始 LQR/VMC 基线；`--controller-mode lqr_residual` 才会把 `--action` 叠加到名义控制上。
+`--task-key` 使用 `server_training/residual_rl_tasks.yaml` 内的 5 个训练 key。`--action` 是归一化 residual 测试动作，顺序为 `[delta_T, delta_Tp, delta_F_l_common, delta_L_ref_left, delta_L_ref_right]`，每个值在 `[-1,1]` 内，再由 Env 内部固定限幅缩放到真实单位。`--controller-mode lqr` 用来对照原始 LQR/VMC 基线；`--controller-mode lqr_residual` 才会把 `--action` 叠加到名义控制上。`--control-decimation-steps` 可显式指定 MuJoCo 子步和控制更新的比例；默认跟随 `--step-seconds`，即每个 policy step 更新一次 Python 控制器。
 
 当前并行 PPO 训练入口：
 
 ```powershell
-& 'E:\miniconda\envs\py310\python.exe' run_train_residual_ppo.py --tasks all --vec-env subproc --n-envs 5 --total-timesteps 200000 --n-steps 64 --batch-size 256 --run-name residual_ppo_mh_jump_ramp
+& 'E:\miniconda\envs\py310\python.exe' run_train_residual_ppo.py --tasks all --vec-env subproc --n-envs 5 --total-timesteps 200000 --n-steps 500 --batch-size 500 --episode-sim-seconds 10 --step-seconds 0.02 --run-name residual_ppo_mh_jump_ramp_50hz
 ```
 
-训练任务来自 `server_training/residual_rl_tasks.yaml`，当前为 `forward_jump_medium/high`、`flight_ramp_medium/high`、`inplace_jump`。训练 episode 默认 `10 s` 是 MuJoCo 仿真时间，不是墙钟时间；训练脚本不打开 viewer、不按 realtime sleep，会尽可能快地把完整任务仿真完。不要把 episode 裁剪到 2 s 来判断行为改善。产物默认写入 `runs/residual_ppo/<run-name>/`，不进仓库。若服务器想先做最小连通性检查，可用：
+训练任务来自 `server_training/residual_rl_tasks.yaml`，当前为 `forward_jump_medium/high`、`flight_ramp_medium/high`、`inplace_jump`。训练 episode 默认 `10 s` 是 MuJoCo 仿真时间，不是墙钟时间；训练脚本不打开 viewer、不按 realtime sleep，会尽可能快地把完整任务仿真完。不要把 episode 裁剪到 2 s 来判断行为改善。`--step-seconds 0.02` 表示 50 Hz policy/controller 更新；MuJoCo 仍推进完整 10000 个 1 ms 物理步。产物默认写入 `runs/residual_ppo/<run-name>/`，不进仓库。
+
+本地单回合速度检查：
 
 ```powershell
-& 'E:\miniconda\envs\py310\python.exe' run_train_residual_ppo.py --tasks inplace_jump --vec-env dummy --n-envs 1 --total-timesteps 16 --n-steps 8 --batch-size 8 --episode-sim-seconds 0.05 --run-name smoke
+Measure-Command { & 'E:\miniconda\envs\py310\python.exe' run_residual_env_smoke.py --task-key flight_ramp_medium --controller-mode lqr_residual --steps 500 --episode-seconds 10 --step-seconds 0.02 --action 0 0 0 0 0 | Out-Null }
 ```
 
-上面的 `--episode-sim-seconds 0.05` 只用于检查训练管线能否启动和保存模型，不是训练设置。
+最近本地结果约 `3.22 s` 跑完完整 `10 s` MuJoCo 任务。该数值包含 Python 启动、导入、模型加载和 reset；服务器上长时间并行训练时，一次性成本会被摊薄。
+
+若服务器想先做最小连通性检查，可用完整 10 s 单回合：
+
+```powershell
+& 'E:\miniconda\envs\py310\python.exe' run_train_residual_ppo.py --tasks flight_ramp_medium --vec-env dummy --n-envs 1 --total-timesteps 500 --n-steps 500 --batch-size 250 --episode-sim-seconds 10 --step-seconds 0.02 --run-name local_single_episode_50hz_speed_check --device cpu
+```
+
+如只检查 Python/SB3 是否能启动和保存模型，可以用更小 timesteps；但用于判断行为改善的 rollout 必须覆盖完整任务时长。
 
 ## 绘图入口
 
@@ -248,7 +264,7 @@ delta_L_ref_right
 
 - 不要把 RL 作为修复物理语义的工具。VMC、腿长、LQR、接触和执行器方向必须先保持可解释。
 - RL 环境应复用 `src/robot_smoke/` 中已经拆分好的模型、控制和观测逻辑，不要复制一份新的物理语义。
-- 控制器接口已按两种模式预留：`rl_controller_mode=lqr` 表示纯原始 LQR；`rl_controller_mode=lqr_residual` 表示在原始 LQR 中层输出后叠加有界 residual RL。当前默认 residual 策略为 0，且 residual 限幅默认为 0，因此该模式现在只用于接口 smoke，不代表已经开始训练。
+- 控制器接口已按两种模式预留：`rl_controller_mode=lqr` 表示纯原始 LQR；`rl_controller_mode=lqr_residual` 表示在原始 LQR 中层输出后叠加有界 residual RL。Env smoke 中 `--action 0 0 0 0 0` 应与纯 `lqr` 基线保持一致，可用 `--compare-zero-residual` 检查。
 - residual RL 接口的动作语义为公共轮端力矩 `T`、虚拟腿俯仰力矩 `Tp`、公共腿长力增量 `length_force_delta`、左右腿长参考增量的有界增量；它不改写 LQR 状态定义、VMC/Jacobian 映射、actuator 符号或底层控制器逻辑。离地 `airborne` 阶段同样属于 RL 优化范围：论文第 3 节门控只是名义基线，residual 可用于起跳、空中姿态、收腿/伸腿和落地恢复。
 - 训练日志、checkpoint、tensorboard、wandb、临时 CSV/PNG 不进 git。
 - `output/`、`tmp/`、`checkpoints/`、`runs/`、`wandb/`、`trained_results/` 已加入忽略。

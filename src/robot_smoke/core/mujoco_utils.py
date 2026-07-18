@@ -8,6 +8,7 @@ from typing import Iterable
 import numpy as np
 
 _NAME_ID_CACHE: dict[tuple[int, int, str], int] = {}
+_JACOBIAN_BUFFER_CACHE: dict[tuple[int, str, int], np.ndarray] = {}
 
 
 def prepare_mujoco_import() -> None:
@@ -80,12 +81,26 @@ def id_by_name(mujoco, model, obj_type, object_name: str) -> int:
     return obj_id
 
 
+def _jacobian_buffer(model, label: str) -> np.ndarray:
+    key = (id(model), label, int(model.nv))
+    cached = _JACOBIAN_BUFFER_CACHE.get(key)
+    if cached is None:
+        cached = np.zeros((3, model.nv), dtype=float)
+        _JACOBIAN_BUFFER_CACHE[key] = cached
+    else:
+        cached.fill(0.0)
+    return cached
+
+
+def body_linear_velocity(mujoco, model, data, body_id: int) -> np.ndarray:
+    jacp = _jacobian_buffer(model, "body_jacp")
+    mujoco.mj_jacBody(model, data, jacp, None, body_id)
+    return jacp @ data.qvel
+
+
 def body_pos_vel(mujoco, model, data, body_name: str) -> tuple[np.ndarray, np.ndarray]:
     body_id = id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, body_name)
-    jacp = np.zeros((3, model.nv))
-    jacr = np.zeros((3, model.nv))
-    mujoco.mj_jacBody(model, data, jacp, jacr, body_id)
-    return data.xpos[body_id].copy(), jacp @ data.qvel
+    return data.xpos[body_id].copy(), body_linear_velocity(mujoco, model, data, body_id)
 
 
 def body_pos(mujoco, model, data, body_name: str) -> np.ndarray:
@@ -95,9 +110,8 @@ def body_pos(mujoco, model, data, body_name: str) -> np.ndarray:
 
 def site_pos_vel(mujoco, model, data, site_name: str) -> tuple[np.ndarray, np.ndarray]:
     site_id = id_by_name(mujoco, model, mujoco.mjtObj.mjOBJ_SITE, site_name)
-    jacp = np.zeros((3, model.nv))
-    jacr = np.zeros((3, model.nv))
-    mujoco.mj_jacSite(model, data, jacp, jacr, site_id)
+    jacp = _jacobian_buffer(model, "site_jacp")
+    mujoco.mj_jacSite(model, data, jacp, None, site_id)
     return data.site_xpos[site_id].copy(), jacp @ data.qvel
 
 
