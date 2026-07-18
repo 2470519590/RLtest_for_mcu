@@ -26,6 +26,7 @@ from ..core.constants import (
     LOCKED_EQUILIBRIUM_WHEEL_COM_KP,
     LOCKED_EQUILIBRIUM_WHEEL_DAMPING,
 )
+from ..control.rl_interface import RL_CONTROLLER_MODES
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,7 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--lqr-true-equilibrium",
         action="store_true",
-        help="use the locked 0.35 m true-equilibrium operating point for auto LQR",
+        help="run the YAML-backed LQR/VMC entry; with schedule disabled this falls back to the locked 0.35 m diagnostic point",
     )
     parser.add_argument(
         "--wheel-balance-only",
@@ -75,6 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--turn-drive-test", choices=("low", "high"))
     parser.add_argument("--roll-test", action="store_true", help="中速依次通过左、右单轮三角坡")
     parser.add_argument("--flight-test", action="store_true", help="高速全宽飞坡，并启用论文第 3 节离地检测")
+    parser.add_argument("--flight-test-speed", choices=("low", "medium", "high"), help="飞坡入口的前进速度档位")
     parser.add_argument("--slope-roll-turn-test", action="store_true", help="复用飞坡场地：先中速前进到坡上，再中速原地旋转")
     parser.add_argument("--slope-roll-turn-start-time", type=float, help="斜坡 ROLL 原地旋转开始时间，单位 s")
     parser.add_argument("--jump-test", action="store_true", help="原地跳跃：腿长从最小值瞬间拉到最大值，并保留离地检测")
@@ -99,6 +101,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--yaw-turn-kd", type=float)
     parser.add_argument("--leg-sync-kp", type=float)
     parser.add_argument("--leg-sync-kd", type=float)
+    parser.add_argument(
+        "--rl-controller-mode",
+        choices=RL_CONTROLLER_MODES,
+        help="middle-layer controller interface: pure LQR or LQR plus bounded residual RL",
+    )
+    parser.add_argument("--rl-residual-t-limit", type=float, help="absolute residual limit for common wheel torque T")
+    parser.add_argument("--rl-residual-tp-limit", type=float, help="absolute residual limit for virtual-leg pitch torque Tp")
+    parser.add_argument(
+        "--rl-residual-length-force-limit",
+        type=float,
+        help="absolute residual limit for common along-leg force delta",
+    )
+    parser.add_argument(
+        "--rl-residual-leg-length-limit",
+        type=float,
+        help="absolute residual limit for left/right leg-length reference deltas",
+    )
 
     parser.set_defaults(
         zero_steps=200,
@@ -161,7 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
         lqr_pitch_sign=-1.0,
         lqr_t_limit=16.0,
         lqr_tp_limit=2.0,
-        landing_hold_t_limit=2.0,
+        landing_hold_t_limit=7.0,
         lqr_output_rate_limit=1000.0,
         lqr_output_lowpass_hz=0.0,
         wheel_ctrl_deadzone=0.0,
@@ -221,6 +240,7 @@ def build_parser() -> argparse.ArgumentParser:
         leg_length_sine_period=1.5,
         roll_test=False,
         flight_test=False,
+        flight_test_speed="high",
         slope_roll_turn_test=False,
         slope_roll_turn_start_time=2.3,
         jump_test=False,
@@ -239,5 +259,10 @@ def build_parser() -> argparse.ArgumentParser:
         length_ki=None,
         length_integral_limit=None,
         length_force_ff=None,
+        rl_controller_mode="lqr",
+        rl_residual_t_limit=0.0,
+        rl_residual_tp_limit=0.0,
+        rl_residual_length_force_limit=0.0,
+        rl_residual_leg_length_limit=0.0,
     )
     return parser

@@ -47,6 +47,7 @@ from .experiments.fl_tests import _run_fl_channel_test, _run_fl_pulse_test
 from .control.lqr_design import _compute_lqr_state, _design_lqr_gain
 from .control.lqr import lqr_state_vector as _lqr_state_vector
 from .control.length_schedule import LengthSchedule, load_length_schedule
+from .control.rl_interface import RL_CONTROLLER_MODES
 from .control.ik import _branch_aware_ik_targets
 from .control.vmc import _drive_joint_position_ctrl
 from .control.turning import turn_rate_magnitude
@@ -338,7 +339,7 @@ def run_smoke(config: RunConfig) -> int:
         print("roll_test: medium forward; left/right low single-wheel ramps x=2.5/3.7 m, full-width jump ramp x=5.1 m")
     if config.flight_test:
         print(
-            "flight_test: high-speed full-width launch ramp x=3.8 m, "
+            f"flight_test: {config.flight_test_speed}-speed full-width launch ramp x=3.8 m, "
             "length=1.80 m, width=1.40 m, height=0.32 m"
         )
         print(
@@ -770,6 +771,11 @@ def run_smoke(config: RunConfig) -> int:
             print("  config.lqr_k: fallback only when schedule is disabled")
         if virtual_result.final_lqr_state is not None:
             lqr_state = virtual_result.final_lqr_state
+            print(f"  config.rl_controller_mode: {config.rl_controller_mode}")
+            print(f"  config.rl_residual_t_limit: {config.rl_residual_t_limit:.6g}")
+            print(f"  config.rl_residual_tp_limit: {config.rl_residual_tp_limit:.6g}")
+            print(f"  config.rl_residual_length_force_limit: {config.rl_residual_length_force_limit:.6g}")
+            print(f"  config.rl_residual_leg_length_limit: {config.rl_residual_leg_length_limit:.6g}")
             print(f"  config.lqr_gain_scale: {config.lqr_gain_scale:.6g}")
             print(f"  config.lqr_x_reference: {config.lqr_x_reference:.6g}")
             print(f"  config.lqr_x_source: {config.lqr_x_source}")
@@ -986,7 +992,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.flight_test:
         args.lqr_true_equilibrium = True
-        args.speed_profile = "high"
+        args.speed_profile = args.flight_test_speed
         args.turn_test = False
         args.turn_direction = None
         args.impact_level = None
@@ -1235,6 +1241,15 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--lqr-output-lowpass-hz must be non-negative")
     if args.wheel_ctrl_deadzone < 0.0:
         parser.error("--wheel-ctrl-deadzone must be non-negative")
+    if args.rl_controller_mode not in RL_CONTROLLER_MODES:
+        parser.error(f"--rl-controller-mode must be one of: {', '.join(RL_CONTROLLER_MODES)}")
+    if min(
+        args.rl_residual_t_limit,
+        args.rl_residual_tp_limit,
+        args.rl_residual_length_force_limit,
+        args.rl_residual_leg_length_limit,
+    ) < 0.0:
+        parser.error("RL residual limits must be non-negative")
     if min(
         args.lqr_t_limit,
         lqr_tp_limit,

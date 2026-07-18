@@ -11,10 +11,10 @@
 - `tasks/`：只保留大任务记录；同类小实验更新同一个任务文件。
 - `templates/`：轻量任务模板。
 - `prompts/`：轻量提示词。
+- `server_training/`：服务器 residual RL 任务清单；当前只放训练配置语义，不放 checkpoint 或日志。
 
 以后需要时再新增：
 
-- `server_training/`：只差正式训练时放服务器训练代码和配置。
 - `trained_results/`：本地下载服务器训练压缩包后使用。
 - `tools/`：后续可放转 ONNX 或可视化测试脚本。
 
@@ -26,6 +26,11 @@
 - `docs/DEBUG_GUIDE.md`：调试提示。
 - `docs/ERROR_CATALOG.md`：已经确认的调试错误、根因和避免重复踩坑的经验。
 - `tasks/CONTROL_FRAMEWORK.md`：当前控制框架大任务记录。后续同类小实验不要新建零散任务文件。
+- `RL说明.md`：residual RL 多任务接口、任务时间和服务器训练指令。
+- `server_training/residual_rl_tasks.yaml`：服务器训练任务 key、速度档和入口参数清单。
+- `server_training/residual_env.py`：最小 residual RL Env 原型，复用现有 MuJoCo smoke rollout。
+- `run_residual_env_smoke.py`：根目录可直接运行的最小 Env smoke 入口。
+- `run_train_residual_ppo.py`：根目录可直接运行的 residual PPO 训练入口，输出默认写入 `runs/`。
 
 ## 默认不要读取或提交
 
@@ -40,7 +45,7 @@
 
 - `run_smoke.py`
 
-当前还没有正式环境、LQR、行为克隆或 PPO 代码。
+当前还没有正式 PPO/SAC 训练代码；已有 residual RL 控制接口和服务器任务清单。
 
 ## 代码分包
 

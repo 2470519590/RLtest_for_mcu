@@ -8,7 +8,7 @@ import time
 class MujocoViewerObserver:
     """Render the exact MjData stepped by an experiment, without a second loop."""
 
-    def __init__(self, mujoco, model, realtime: bool) -> None:
+    def __init__(self, mujoco, model, realtime: bool, sync_hz: float = 60.0) -> None:
         self._mujoco = mujoco
         self._model = model
         self._realtime = realtime
@@ -17,7 +17,7 @@ class MujocoViewerObserver:
         self._wall_start = 0.0
         self._sim_start = 0.0
         self._last_sync_sim = 0.0
-        self._sync_interval = 1.0 / 60.0
+        self._sync_interval = 1.0 / max(float(sync_hz), 1.0)
         self._phase = "ground"
 
     def start(self, data):

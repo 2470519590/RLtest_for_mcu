@@ -37,6 +37,12 @@ from ..control.roll import base_roll_angle as _base_roll_angle
 from ..control.roll import clamp_leg_length as _clamp_leg_length
 from ..control.roll import roll_leg_length_targets as _roll_leg_length_targets
 from ..control.length_schedule import LengthSchedule
+from ..control.rl_interface import (
+    ResidualRlAction,
+    ResidualRlObservation,
+    ResidualRlPolicy,
+    apply_controller_interface as _apply_controller_interface,
+)
 from ..control.whole_body import compose_whole_body_command as _compose_whole_body_command
 from ..control.turning import split_wheel_torque as _split_wheel_torque
 from ..control.turning import turn_rate_magnitude as _turn_rate_magnitude
@@ -181,6 +187,23 @@ def _landing_state_is_balanced(state: LqrState | None) -> bool:
     )
 
 
+def _rl_task_command_name(
+    *,
+    jump_test: bool,
+    forward_jump_test: bool,
+    flight_detection_enabled: bool,
+    speed_profile: str | None,
+) -> tuple[str, str]:
+    """Return the command-conditioned RL task name and speed label."""
+    if forward_jump_test:
+        return "forward_jump", speed_profile or "none"
+    if jump_test:
+        return "inplace_jump", "zero"
+    if flight_detection_enabled:
+        return "flight_ramp", speed_profile or "none"
+    return "balance", speed_profile or "none"
+
+
 def _position_ik_cache_key(
     side: str,
     target: tuple[float, float],
@@ -315,6 +338,8 @@ def _run_virtual_rod_test(
     flight_airborne_confirm_seconds: float = 0.05,
     flight_airborne_rearm_seconds: float = 1.0,
     runtime_controls: RuntimeControlConfig | None = None,
+    residual_rl_policy: ResidualRlPolicy | None = None,
+    time_offset_s: float = 0.0,
     on_initialized: Callable[[object], Callable[..., bool] | None] | None = None,
 ) -> VirtualRodResult:
     if runtime_controls is None:
@@ -379,6 +404,7 @@ def _run_virtual_rod_test(
     left_wheel_torque = 0.0
     right_wheel_torque = 0.0
     length_force_delta = 0.0
+    residual_action = ResidualRlAction()
     x_velocity_reference = 0.0
     history: list[LqrHistorySample] = []
     ik_target_cache: dict[tuple[str, float, float, str, float, int], tuple[float, float]] = {}
@@ -407,7 +433,7 @@ def _run_virtual_rod_test(
     jump_crouch_leg_length = max(0.18, minimum_leg_length)
     previous_step_virtual_rod_control = virtual_rod_control
     startup_steps = int(math.ceil(startup_ramp_seconds / float(model.opt.timestep))) if startup_ramp_seconds > 0.0 else 0
-    task_duration_s = max(0.0, steps * float(model.opt.timestep) - startup_ramp_seconds)
+    task_duration_s = max(0.0, time_offset_s + steps * float(model.opt.timestep) - startup_ramp_seconds)
     if jump_test:
         _prewarm_jump_position_ik(
             mujoco,
@@ -423,7 +449,7 @@ def _run_virtual_rod_test(
         )
     step_observer = on_initialized(data) if on_initialized is not None else None
     for step in range(steps):
-        time_s = step * float(model.opt.timestep)
+        time_s = time_offset_s + step * float(model.opt.timestep)
         left_contact_force = _contact_normal_force_for_wheel(mujoco, model, data, "left")
         right_contact_force = _contact_normal_force_for_wheel(mujoco, model, data, "right")
         if left_contact_force >= flight_airborne_force_threshold or right_contact_force >= flight_airborne_force_threshold:
@@ -480,7 +506,6 @@ def _run_virtual_rod_test(
             active_lqr_u0 = scheduled.lqr_u0
             active_length_force_ff = scheduled.force_ff
         if lqr_test and step % lqr_control_period_steps == 0:
-            time_s = step * float(model.opt.timestep)
             task_time_s = max(0.0, time_s - startup_ramp_seconds)
             _, x_reference_rate = _trapezoid_speed_reference(speed_profile, task_time_s)
             if slope_roll_turn_test and task_time_s >= slope_roll_turn_start_time:
@@ -530,6 +555,38 @@ def _run_virtual_rod_test(
                         _reset_vmc_memory(vmc_memory)
                 else:
                     landing_hold_stable_time = 0.0
+            rl_task_name, rl_commanded_speed = _rl_task_command_name(
+                jump_test=jump_test,
+                forward_jump_test=forward_jump_test,
+                flight_detection_enabled=flight_detection_enabled,
+                speed_profile=speed_profile,
+            )
+            residual_observation = ResidualRlObservation(
+                time_s=time_s,
+                task_time_s=task_time_s,
+                task_name=rl_task_name,
+                commanded_speed=rl_commanded_speed,
+                state=final_lqr_state,
+                x_velocity_reference=x_velocity_reference,
+                nominal_wheel_torque=wheel_torque,
+                nominal_pitch_torque=pitch_torque,
+                nominal_length_force_delta=length_force_delta,
+                airborne=airborne,
+                landing_phase=landing_phase,
+                left_contact_force=left_contact_force,
+                right_contact_force=right_contact_force,
+            )
+            wheel_torque, pitch_torque, length_force_delta, residual_action = _apply_controller_interface(
+                mode=runtime_controls.rl_controller_mode,
+                observation=residual_observation,
+                residual_policy=residual_rl_policy,
+                residual_t_limit=runtime_controls.rl_residual_t_limit,
+                residual_tp_limit=runtime_controls.rl_residual_tp_limit,
+                residual_length_force_limit=runtime_controls.rl_residual_length_force_limit,
+                residual_leg_length_limit=runtime_controls.rl_residual_leg_length_limit,
+                lqr_t_limit=lqr_t_limit,
+                lqr_tp_limit=lqr_tp_limit,
+            )
             control_dt = float(model.opt.timestep) * lqr_control_period_steps
             wheel_torque = _lowpass_value(
                 wheel_torque,
@@ -562,7 +619,11 @@ def _run_virtual_rod_test(
             if landing_hold_active:
                 wheel_torque = float(np.clip(wheel_torque, -landing_hold_t_limit, landing_hold_t_limit))
             if airborne:
-                wheel_torque = 0.0
+                wheel_torque = (
+                    residual_action.wheel_torque
+                    if runtime_controls.rl_controller_mode == "lqr_residual"
+                    else 0.0
+                )
             previous_wheel_torque = wheel_torque
             previous_pitch_torque = pitch_torque
             yaw_rate_reference = (
@@ -627,10 +688,8 @@ def _run_virtual_rod_test(
             max_abs_lqr_wheel_torque = max(max_abs_lqr_wheel_torque, abs(wheel_torque))
             max_abs_lqr_pitch_torque = max(max_abs_lqr_pitch_torque, abs(pitch_torque))
         if airborne:
-            wheel_torque = 0.0
             turn_torque = 0.0
-            left_wheel_torque = 0.0
-            right_wheel_torque = 0.0
+            left_wheel_torque, right_wheel_torque = _split_wheel_torque(wheel_torque, turn_torque)
         pitch_for_theta_ff = final_lqr_state.pitch if final_lqr_state is not None else _base_pitch_from_qpos(data.qpos)
         task_time_s = max(0.0, time_s - startup_ramp_seconds)
         left_leg = _compute_virtual_leg_state(mujoco, model, data, "left")
@@ -732,6 +791,23 @@ def _run_virtual_rod_test(
             )
             step_right_target = (
                 _clamp_leg_length(right_leg.length, minimum_leg_length, maximum_leg_length),
+                step_right_target[1],
+            )
+        if runtime_controls.rl_controller_mode == "lqr_residual":
+            step_left_target = (
+                _clamp_leg_length(
+                    step_left_target[0] + residual_action.left_length_reference_delta,
+                    minimum_leg_length,
+                    maximum_leg_length,
+                ),
+                step_left_target[1],
+            )
+            step_right_target = (
+                _clamp_leg_length(
+                    step_right_target[0] + residual_action.right_length_reference_delta,
+                    minimum_leg_length,
+                    maximum_leg_length,
+                ),
                 step_right_target[1],
             )
         effective_theta_kp = 0.0 if lqr_test else theta_kp
@@ -969,6 +1045,7 @@ def _run_virtual_rod_test(
         first_airborne_time=first_airborne_time,
         last_airborne_time=last_airborne_time,
         final_operating_point=final_operating_point,
+        final_data=_copy_data(mujoco, model, data),
     )
 
 

@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-恢复固定 `L0=0.35 m` 的 locked true-equilibrium 平衡入口，维护解析五连杆 VMC、腿长控制、轮端转向控制；最终运动与稳定性由 viewer 人工确认。
+维护以 `config/smoke.yaml` 为准的本地 MuJoCo 控制链：默认腿长 `0.24 m`、启用腿长调度表、使用模拟 wheel odometry 的 LQR `x/dx`。继续保持解析五连杆 VMC、腿长控制、轮端转向控制；最终运动与稳定性由 viewer 人工确认。
 
 ## 当前有效控制
 
@@ -14,7 +14,7 @@
 - 转向档位：`low=pi/2`、`medium=pi`、`high=10 rad/s`。
 - 旋转前进：`low` 固定为低速前进加 low 旋转；`high` 固定为高速前进加 medium 旋转。
 - 双腿长度采用 PID + 重力前馈；`L_d` 只表示几何高度参考。横滚动态补偿为 `F_roll=K_gamma(gamma_d-gamma)`，以反号直接叠加到左右沿腿推力。斜坡地面倾角估计当前未启用。
-- 当前为长度通路辨识，默认暂时锁定 `Ki,L=Kd,L=0`，仅保留前馈加比例项；`L_d` 固定为 `0.35 m`。
+- 当前默认腿长目标来自 `config/smoke.yaml`，最近为 `0.24 m`；`Ki,L/Kd,L/F_l0` 等底层参数也以 YAML 为准，不在入口里做隐藏覆盖。
 - 控制结构按文章框图组合：整体反馈输出 `T/Tp`，yaw PD 输出轮差，腿同步 PD 输出反向 `Tp_sync`，长度 PID 输出 `F_base`，roll 几何通道输出左右 `L_d`，roll P 通道输出 `F_roll`，两路在 VMC 前汇合。
 
 ## 入口
@@ -165,9 +165,26 @@ Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
 - Verification: `py_compile` passed for `virtual_rod.py`. Viewer validation is still required for landing behavior.
 - Landing leg-length hold: after the first recontact, the effective airborne flag is latched off until the non-position LQR states except `x` stay near zero for `0.5 s`. During this hold, left/right leg-length references follow the measured leg lengths, so the length spring does not force the legs back to the nominal `L_ref` while the body is still recovering. The support-force curves remain visible in the LQR debug plot, but airborne start/end markers use the effective control state rather than raw threshold chatter.
 - Landing speed reference: during `landing_hold`, the speed reference is explicitly set to `dx_ref=0`. After a rollout has actually entered airborne mode, the old ground speed trapezoid is suppressed for the rest of that rollout, so leaving `landing_hold` cannot reconnect a residual `dx_ref` from the original high-speed command. The LQR debug plot draws phase transition lines on every subplot so the landing phase can be compared against `x/dx`, pitch, theta, torque, leg length, wheel height, and support force.
-- Landing wheel-torque limit: `config/smoke.yaml` now exposes `landing_hold_t_limit`. During `landing_hold`, the final wheel common torque `T` is clipped after the normal LQR low-pass/rate limiting stage, so the landing recovery cannot command the full `lqr_t_limit` impulse. Current default is `2.0 N*m`.
+- Landing wheel-torque limit: `config/smoke.yaml` now exposes `landing_hold_t_limit`. During `landing_hold`, the final wheel common torque `T` is clipped after the normal LQR low-pass/rate limiting stage, so the landing recovery cannot command the full `lqr_t_limit` impulse. Current value is read from YAML; as of this record it is `7.0 N*m`.
 - Airborne re-trigger filtering: `config/smoke.yaml` exposes `flight_airborne_confirm_seconds` and `flight_airborne_rearm_seconds`. Both wheel support forces must stay below the threshold for the confirm time before `airborne` is entered, and after `landing_hold` exits the detector ignores short re-triggers for the rearm window. This prevents support-force chatter after balance recovery from creating extra airborne/landing phases.
 
 ## Slope roll-turn diagnostic
 
 - Added `--slope-roll-turn-test`: it reuses the full-width flight-ramp scene without enabling airborne detection, drives forward at medium speed until `--slope-roll-turn-start-time` seconds, holds `dx_ref=0` for one second, then ramps to a low in-place yaw-rate command. This entry is diagnostic only; ramp placement and roll behavior must be judged in viewer.
+
+## RL residual interface preparation
+
+- Corrected the current semantics record to trust `config/smoke.yaml`: default `leg_length=0.24 m`, `length_schedule=true`, and LQR `x/dx` use simulated wheel odometry rather than `base_x/base_x_dot`. The old `0.35 m` locked workpoint remains only as fallback / diagnostic wording when scheduling is disabled.
+- Added a controller interface mode switch: `rl_controller_mode=lqr` keeps the nominal LQR middle-layer output unchanged; `rl_controller_mode=lqr_residual` adds a bounded residual-RL action after the nominal LQR output and before the existing output low-pass/rate-limit path.
+- Current residual policy is a zero placeholder and all residual limits default to `0`, so the residual mode is an interface smoke only. It does not start training and does not alter VMC, Jacobian, actuator signs, or the original LQR control law.
+- Residual actions now cover `delta_T`, `delta_Tp`, common `delta_F_l`, and left/right leg-length reference deltas. Leg-length residuals still pass through the configured safe length clamp.
+- Airborne mode is also part of the RL optimization surface: pure `lqr` keeps the paper section 3 LQR gate; `lqr_residual` treats that gate as the nominal baseline and can add bounded residuals for takeoff, aerial posture, tuck/extension and landing recovery.
+- Added `--flight-test-speed low|medium|high` so flight-ramp training can be sampled by speed just like forward-jump training. `RL说明.md` now records the compact MCU-oriented residual RL framework; `server_training/residual_rl_tasks.yaml` stores the task keys for server-side samplers.
+- Direction correction: keep LQR/VMC/PID/PD as MCU-portable nominal control and train only a small residual MLP. Target runtime is roughly 1 kHz traditional control and 100 Hz residual NN. The RL documentation was trimmed to framework semantics; detailed PPO/env implementation remains future work.
+- Added the first minimal residual Env prototype: `server_training/residual_env.py` wraps the existing virtual-rod MuJoCo rollout with Gymnasium-style `reset/step`, normalized 5-D residual action, and task conditioning from `server_training/residual_rl_tasks.yaml`. `run_residual_env_smoke.py` is the root runnable smoke entry.
+- Verification: `py_compile` passed for the new Env/script and touched rollout/types files. Short 2-step env smoke passed for `inplace_jump`, `forward_jump_low`, and `flight_ramp_low`; a nonzero normalized residual action also reached the control path without crashing. This only verifies the interface path, not physical jump/landing quality or PPO training performance.
+- Added `run_residual_env_smoke.py --visualize`: visual smoke opens the MuJoCo viewer through the same task-conditioned residual Env config and prints `residual_mode`, normalized action and action limits before rollout, so the user can directly see whether the residual-control path is being exercised.
+- Fixed residual zero-action semantics: airborne paper-style nominal gating is applied before residual injection in both `lqr` and `lqr_residual` modes, and airborne wheel torque in residual mode comes only from residual `delta_T`. Therefore a zero residual no longer bypasses the nominal airborne gate. Added `--controller-mode lqr|lqr_residual` and `--viewer-sync-hz` to the Env smoke entry for visual baseline comparison and lower render load.
+- Removed low-speed forward-jump and flight-ramp keys from the residual-RL training task list. Low speed is kept only as an ordinary diagnostic capability where applicable; it is not a valid RL training task for speed jump or ramp landing because it predictably trips before a useful landing/balance sample.
+- Added `run_residual_env_smoke.py --compare-zero-residual` for headless baseline checks: it runs the same task once as pure `lqr` and once as `lqr_residual` with zero residual action, then prints key metric differences. A short `flight_ramp_medium` 0.1 s comparison produced zero difference before airborne/contact transitions.
+- Added `run_train_residual_ppo.py` and `server_training/train_residual_ppo.py` as the first Stable-Baselines3 PPO training entry. It samples the 5 residual task keys in parallel with `SubprocVecEnv` by default, uses a small `32x32 tanh` actor/critic MLP, and saves training outputs under ignored `runs/`. Training episode horizon defaults to `10 s` of MuJoCo simulation time, matching README/RL task visualization duration; training runs headless/as-fast-as-possible, and shorter horizons are only for pipeline smoke checks. Verification: `py_compile` passed, `--help` listed the 5 tasks, and a 16-timestep dummy PPO smoke saved `runs/residual_ppo/local_smoke_cpu/models/final_model.zip`.

@@ -363,6 +363,7 @@ class VirtualRodResult:
     first_airborne_time: float | None
     last_airborne_time: float | None
     final_operating_point: StaticOperatingPointSample | None
+    final_data: object | None = None
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,7 @@
 # 本文件是本地 MuJoCo smoke 的主配置。命令行参数优先级高于这里的值。
 # 默认单位：m、s、rad、N、N*m。
-# LQR 状态顺序：[theta, dtheta, x_b, dx_b, pitch, d_pitch]。
+# LQR 状态顺序：[theta, dtheta, x, dx, pitch, d_pitch]。
+# 其中 x/dx 默认来自模拟 wheel odometry，不是 base_x/base_x_dot。
 # LQR 输入顺序：[T, Tp]，其中 T 是左右轮公共力矩，Tp 是虚拟腿俯仰力矩。
 
 # 一、运行时与工作点选择。
@@ -84,14 +85,27 @@ landing_hold_t_limit: 7.0
 lqr_output_rate_limit: 1000.0
 lqr_output_lowpass_hz: 0.0
 lqr_control_period_steps: null
-lqr_q_diag: [1.0, 1.0, 50.0, 100.0, 5000.0, 10.0]  # theta、dtheta、x_b、dx_b、pitch、d_pitch
+lqr_q_diag: [1.0, 1.0, 50.0, 100.0, 5000.0, 10.0]  # theta、dtheta、x、dx、pitch、d_pitch
 lqr_r_diag: [1.0, 0.25]                            # T、Tp
 lqr_x_outer_kp: 0.0
 lqr_x_outer_max_v: 0.35
 lqr_wheel_sign: 1.0
 lqr_pitch_sign: -1.0
 
-# 五、原地转向与双腿同步。
+# 五、RL 控制器接口。
+# rl_controller_mode：
+#   lqr：纯原始 LQR 中层输出。
+#   lqr_residual：在原始 LQR 输出后叠加 residual RL 接口输出，再进入既有低通/斜率限幅。
+# 当前未加载训练策略，默认 residual 为 0；因此 residual 模式只用于接口 smoke。
+# residual 限幅默认为 0，后续接入策略前必须显式放开并记录任务语义。
+# leg_length residual 只作用于左右腿长参考，最后仍会被 minimum/maximum_leg_length 限幅。
+rl_controller_mode: lqr
+rl_residual_t_limit: 0.0
+rl_residual_tp_limit: 0.0
+rl_residual_length_force_limit: 0.0
+rl_residual_leg_length_limit: 0.0
+
+# 六、原地转向与双腿同步。
 # yaw_turn_*：期望 yaw 角速度到左右轮差速力矩的 PD。
 # leg_sync_*：左右虚拟腿竖直角差到左右相反 Tp 偏置的 PD。
 # input_lowpass：原始测量量低通。
@@ -108,7 +122,7 @@ leg_sync_kd: 20.0
 yaw_turn_kp: 3.0
 yaw_turn_kd: 0.1
 
-# 六、横滚补偿与腿高阶跃测试。
+# 七、横滚补偿与腿高阶跃测试。
 # roll_reference：期望机身横滚角；普通平地测试保持 0。
 # roll_force_kp：论文横滚补偿 K_gamma。
 #   F_left = F_base + K_gamma*(roll_reference - roll)
@@ -121,10 +135,11 @@ leg_height_test: false
 leg_height_levels: [0.16, 0.23, 0.30]
 history_sample_interval: 5
 
-# 七、飞坡与离地检测。
+# 八、飞坡与离地检测。
 # flight_airborne_force_threshold：左右轮接触法向力都低于该阈值时判定离地。
 # flight_airborne_confirm_seconds：低支持力连续保持这么久才确认离地，过滤触地后的短毛刺。
 # flight_airborne_rearm_seconds：落地恢复成功后，短时间内不允许再次触发离地。
 flight_airborne_force_threshold: 20.0
 flight_airborne_confirm_seconds: 0.05
 flight_airborne_rearm_seconds: 1.0
+flight_test_speed: high
