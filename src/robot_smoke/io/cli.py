@@ -75,6 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--turn-drive-test", choices=("low", "high"))
     parser.add_argument("--roll-test", action="store_true", help="中速依次通过左、右单轮三角坡")
     parser.add_argument("--flight-test", action="store_true", help="高速全宽飞坡，并启用论文第 3 节离地检测")
+    parser.add_argument("--slope-roll-turn-test", action="store_true", help="复用飞坡场地：先中速前进到坡上，再中速原地旋转")
+    parser.add_argument("--slope-roll-turn-start-time", type=float, help="斜坡 ROLL 原地旋转开始时间，单位 s")
     parser.add_argument("--jump-test", action="store_true", help="原地跳跃：腿长从最小值瞬间拉到最大值，并保留离地检测")
     parser.add_argument(
         "--forward-jump-test",
@@ -219,6 +221,8 @@ def build_parser() -> argparse.ArgumentParser:
         leg_length_sine_period=1.5,
         roll_test=False,
         flight_test=False,
+        slope_roll_turn_test=False,
+        slope_roll_turn_start_time=2.3,
         jump_test=False,
         forward_jump_test=None,
         flight_detection_enabled=False,

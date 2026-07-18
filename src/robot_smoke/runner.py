@@ -286,7 +286,7 @@ def _print_low_length_stage_diagnostics(history) -> None:
 def run_smoke(config: RunConfig) -> int:
     mujoco = _load_mujoco()
     runtime_controls = runtime_control_config(config)
-    if config.flight_test:
+    if config.flight_test or config.slope_roll_turn_test:
         model = mujoco.MjModel.from_xml_string(_flight_test_model_xml(Path(config.model_path)))
     elif config.roll_test:
         model = mujoco.MjModel.from_xml_string(_roll_test_model_xml(Path(config.model_path)))
@@ -344,6 +344,11 @@ def run_smoke(config: RunConfig) -> int:
         print(
             "flight_detection: airborne when both wheel normal forces are below "
             f"{float(config.flight_airborne_force_threshold):.6g} N"
+        )
+    if config.slope_roll_turn_test:
+        print(
+            "slope_roll_turn_test: flight-ramp scene; medium forward until "
+            f"t={float(config.slope_roll_turn_start_time):.3g} s, hold dx_ref=0 for 1 s, then low yaw-rate turn"
         )
     if config.jump_test:
         print(
@@ -698,6 +703,8 @@ def run_smoke(config: RunConfig) -> int:
                 turn_direction=config.turn_direction,
                 turn_speed=config.turn_speed,
                 turn_test=config.turn_test,
+                slope_roll_turn_test=bool(config.slope_roll_turn_test),
+                slope_roll_turn_start_time=float(config.slope_roll_turn_start_time),
                 leg_sync_kp=config.leg_sync_kp,
                 leg_sync_kd=config.leg_sync_kd,
                 yaw_turn_kp=config.yaw_turn_kp,
@@ -867,12 +874,20 @@ def run_smoke(config: RunConfig) -> int:
         )
         if config.lqr_test and virtual_result.final_lqr_state is not None:
             final_state = virtual_result.final_lqr_state
-            if config.leg_length_sine_test or config.roll_test or config.flight_test or config.jump_test:
+            if (
+                config.leg_length_sine_test
+                or config.roll_test
+                or config.flight_test
+                or config.slope_roll_turn_test
+                or config.jump_test
+            ):
                 behavior_passed = True
                 if config.jump_test:
                     diagnostic_name = "jump_test"
                 elif config.flight_test:
                     diagnostic_name = "flight_test"
+                elif config.slope_roll_turn_test:
+                    diagnostic_name = "slope_roll_turn_test"
                 elif config.leg_length_sine_test:
                     diagnostic_name = "dynamic_length_test"
                 else:
@@ -978,6 +993,16 @@ def main(argv: list[str] | None = None) -> int:
         args.flight_detection_enabled = True
         if args.visualize_seconds is None:
             args.visualize_seconds = 10.0
+    if args.slope_roll_turn_test:
+        args.lqr_true_equilibrium = True
+        args.speed_profile = "medium"
+        args.turn_test = True
+        args.turn_speed = "low"
+        args.turn_direction = None
+        args.impact_level = None
+        args.flight_detection_enabled = False
+        if args.visualize_seconds is None:
+            args.visualize_seconds = 10.0
     if args.jump_test:
         args.lqr_true_equilibrium = True
         args.speed_profile = None
@@ -1078,7 +1103,7 @@ def main(argv: list[str] | None = None) -> int:
         args.lqr_test = True
         args.lqr_auto_design = False
         args.use_locked_equilibrium = True
-        if args.turn_drive_test is None:
+        if args.turn_drive_test is None and not args.slope_roll_turn_test:
             args.speed_profile = None
         args.impact_level = None
         if args.turn_test:
@@ -1140,6 +1165,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--visualize-seconds must be positive")
     if args.startup_ramp_seconds < 0.0:
         parser.error("--startup-ramp-seconds must be non-negative")
+    if args.slope_roll_turn_start_time < 0.0:
+        parser.error("--slope-roll-turn-start-time must be non-negative")
     if args.initial_leg_length <= 0.0:
         parser.error("--initial-leg-length must be positive")
     if args.virtual_rod_test or args.lqr_test:

@@ -106,6 +106,21 @@ Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
 & 'E:\miniconda\envs\py310\python.exe' run_smoke.py --flight-test --visualize --visualize-seconds 10 --lqr-debug-plot
 ```
 
+### 斜坡 ROLL 原地旋转测试
+
+该入口复用飞坡场地，但不启用离地检测。小车先中速前进到全宽斜坡上，随后停止速度参考并停 1 秒，再启动低速原地旋转，用于观察斜坡上 roll/腿长补偿和双腿协调。
+
+```powershell
+Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --slope-roll-turn-test --visualize --visualize-seconds 10 --lqr-debug-plot
+```
+
+如果停车开始时小车还没有到坡上，或已经越过坡面，可调整：
+
+```powershell
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --slope-roll-turn-test --slope-roll-turn-start-time 2.3 --visualize --visualize-seconds 10 --lqr-debug-plot
+```
+
 ### 原地跳跃测试
 
 该入口用于诊断跳跃流程：默认工作点支撑，随后下蹲到最小腿长，再快速伸腿；离地检测和落地逻辑保持启用。

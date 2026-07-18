@@ -131,6 +131,18 @@ def _synchronized_turn_rate_reference(turn_speed: str, time_s: float, duration_s
     return magnitude
 
 
+def _delayed_hold_turn_rate_reference(turn_speed: str, time_s: float, start_time_s: float) -> float:
+    """Ramp to a constant yaw-rate reference after the robot has reached the ramp."""
+    ramp_time = 0.15
+    if time_s <= start_time_s:
+        return 0.0
+    elapsed = time_s - start_time_s
+    magnitude = _turn_rate_magnitude(turn_speed)
+    if elapsed < ramp_time:
+        return magnitude * elapsed / ramp_time
+    return magnitude
+
+
 def _startup_length_target(target: tuple[float, float], time_s: float, ramp_seconds: float) -> tuple[float, float]:
     if ramp_seconds <= 0.0:
         return target
@@ -280,6 +292,8 @@ def _run_virtual_rod_test(
     turn_direction: str | None = None,
     turn_speed: str = "high",
     turn_test: bool = False,
+    slope_roll_turn_test: bool = False,
+    slope_roll_turn_start_time: float = 2.3,
     leg_sync_kp: float = 30.0,
     leg_sync_kd: float = 20.0,
     yaw_turn_kp: float = 1.8,
@@ -469,6 +483,8 @@ def _run_virtual_rod_test(
             time_s = step * float(model.opt.timestep)
             task_time_s = max(0.0, time_s - startup_ramp_seconds)
             _, x_reference_rate = _trapezoid_speed_reference(speed_profile, task_time_s)
+            if slope_roll_turn_test and task_time_s >= slope_roll_turn_start_time:
+                x_reference_rate = 0.0
             if suppress_speed_profile_after_airborne:
                 x_reference_rate = 0.0
             effective_x_reference = float(odometry.position) - float(active_lqr_x0[2])
@@ -552,7 +568,11 @@ def _run_virtual_rod_test(
             yaw_rate_reference = (
                 _synchronized_turn_rate_reference(turn_speed, task_time_s, task_duration_s)
                 if leg_length_sine_test
-                else _turn_rate_reference(turn_direction, turn_speed, turn_test, task_time_s)
+                else (
+                    _delayed_hold_turn_rate_reference(turn_speed, task_time_s, slope_roll_turn_start_time + 1.0)
+                    if slope_roll_turn_test
+                    else _turn_rate_reference(turn_direction, turn_speed, turn_test, task_time_s)
+                )
             )
             if airborne:
                 yaw_rate_reference = 0.0
