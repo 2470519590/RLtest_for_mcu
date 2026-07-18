@@ -93,18 +93,17 @@ Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
 
 ```powershell
 & 'E:\miniconda\envs\py310\python.exe' run_smoke.py --turn-drive-test low --visualize --visualize-seconds 10
-& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --turn-drive-test high --visualize --visualize-seconds 10
 ```
 
 含义：
 
 - `low`：低速前进 + 低速旋转
-- `high`：高速前进 + 中速旋转
+
 
 ### 6. 变腿长高速旋转
 
 ```powershell
-& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --turn-length-sine-test --visualize --visualize-seconds 10 --roll-length-plot
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --turn-length-sine-test --visualize --visualize-seconds 10
 ```
 
 该入口用于观察高速原地旋转时，腿长在 `minimum_leg_length..maximum_leg_length` 范围内做低频正弦跟踪的效果。
@@ -112,7 +111,7 @@ Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
 ### 7. Roll 坡道测试
 
 ```powershell
-& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --roll-test --roll-length-plot --visualize --visualize-seconds 10
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --roll-test --visualize --visualize-seconds 10
 ```
 
 该入口注入专用坡道，用于观察论文 2.2 双腿长度控制和 roll 补偿通道。
@@ -120,15 +119,15 @@ Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
 ### 8. 飞坡 / 离地检测
 
 ```powershell
-& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --flight-test --visualize --visualize-seconds 10 --lqr-debug-plot
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --flight-test --visualize --visualize-seconds 10
 ```
 
 该入口注入全宽飞坡，并启用论文第 3 节离地检测。当前飞坡与跳跃仍是诊断入口，不是合格 RL 任务结论。
 
-### 9. 斜坡 Roll 原地旋转
+### 9. 斜坡 Roll 原地旋转(不作为任务，没有调好)
 
 ```powershell
-& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --slope-roll-turn-test --visualize --visualize-seconds 10 --lqr-debug-plot
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --slope-roll-turn-test --visualize --visualize-seconds 10
 ```
 
 该入口复用飞坡场地但不启用离地检测：先中速前进到坡上，停车 1 秒，再低速原地旋转。停车开始时间可调：
@@ -142,15 +141,15 @@ Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
 ### 10. 原地跳跃
 
 ```powershell
-& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --jump-test --visualize --visualize-seconds 10 --lqr-debug-plot
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --jump-test --visualize --visualize-seconds 10
 ```
 
 ### 11. 前进跳跃
 
 ```powershell
-& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --forward-jump-test low --visualize --visualize-seconds 10 --lqr-debug-plot
-& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --forward-jump-test medium --visualize --visualize-seconds 10 --lqr-debug-plot
-& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --forward-jump-test high --visualize --visualize-seconds 10 --lqr-debug-plot
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --forward-jump-test low --visualize --visualize-seconds 10
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --forward-jump-test medium --visualize --visualize-seconds 10
+& 'E:\miniconda\envs\py310\python.exe' run_smoke.py --forward-jump-test high --visualize --visualize-seconds 10
 ```
 
 跳跃相关入口目前仍不合格，后续可交给 RL 优化落地姿态，但训练前必须明确状态机、接触检测和参考命令语义。
