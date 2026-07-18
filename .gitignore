@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 本地运行产物
+output/
+tmp/
+logs/
+*.log
+
+# 临时数据与调试导出
+*.csv
+*.tsv
+*.npy
+*.npz
+*.pkl
+*.pickle
+
+# 训练产物与大文件输出
+checkpoints/
+runs/
+wandb/
+tensorboard/
+trained_results/
+*.pt
+*.pth
+*.onnx
+*.ckpt
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
