@@ -9,6 +9,66 @@ from pathlib import Path
 from .residual_env import DEFAULT_ACTION_LIMITS, DEFAULT_EPISODE_SECONDS, ResidualCommandEnv, load_residual_tasks
 
 
+class RewardTermsPrinter:
+    """Small SB3 callback-like helper created lazily after SB3 import."""
+
+    @staticmethod
+    def build(base_callback_cls):
+        class _RewardTermsCallback(base_callback_cls):
+            def __init__(self, print_freq: int = 1):
+                super().__init__()
+                self.print_freq = max(1, int(print_freq))
+                self._rollouts = 0
+                self._sums: dict[str, float] = {}
+                self._task_sums: dict[str, dict[str, float]] = {}
+                self._task_counts: dict[str, int] = {}
+                self._count = 0
+
+            def _on_step(self) -> bool:
+                for info in self.locals.get("infos", []):
+                    terms = info.get("reward_terms") if isinstance(info, dict) else None
+                    if not isinstance(terms, dict):
+                        continue
+                    for key, value in terms.items():
+                        self._sums[key] = self._sums.get(key, 0.0) + float(value)
+                    task_key = str(info.get("task_key", "unknown"))
+                    task_sums = self._task_sums.setdefault(task_key, {})
+                    for key, value in terms.items():
+                        task_sums[key] = task_sums.get(key, 0.0) + float(value)
+                    self._task_counts[task_key] = self._task_counts.get(task_key, 0) + 1
+                    self._count += 1
+                return True
+
+            def _on_rollout_end(self) -> None:
+                self._rollouts += 1
+                if self._count <= 0 or self._rollouts % self.print_freq != 0:
+                    return
+                keys = ("total", "posture", "speed", "impact", "leg", "action", "smooth", "liftoff", "recovery", "fall")
+                summary = " ".join(
+                    f"{key}={self._sums.get(key, 0.0) / self._count:.4g}"
+                    for key in keys
+                    if key in self._sums
+                )
+                print(f"reward_terms_mean[{self._rollouts}]: {summary}")
+                for task_key in sorted(self._task_sums):
+                    count = self._task_counts.get(task_key, 0)
+                    if count <= 0:
+                        continue
+                    task_sums = self._task_sums[task_key]
+                    task_summary = " ".join(
+                        f"{key}={task_sums.get(key, 0.0) / count:.4g}"
+                        for key in keys
+                        if key in task_sums
+                    )
+                    print(f"reward_terms_by_task[{self._rollouts}][{task_key}]: {task_summary}")
+                self._sums.clear()
+                self._task_sums.clear()
+                self._task_counts.clear()
+                self._count = 0
+
+        return _RewardTermsCallback
+
+
 def build_parser() -> argparse.ArgumentParser:
     tasks = load_residual_tasks()
     parser = argparse.ArgumentParser(description="Train residual RL with Stable-Baselines3 PPO.")
@@ -16,6 +76,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--total-timesteps", type=int, default=10_000)
     parser.add_argument("--n-envs", type=int, default=5)
     parser.add_argument("--vec-env", choices=("subproc", "dummy"), default="subproc")
+    parser.add_argument(
+        "--subproc-start-method",
+        choices=("spawn", "forkserver", "fork"),
+        default="spawn",
+        help="SubprocVecEnv start method; use forkserver/fork on Linux servers if stable",
+    )
     parser.add_argument(
         "--episode-sim-seconds",
         "--episode-seconds",
@@ -43,6 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--output-dir", type=Path, default=Path("runs") / "residual_ppo")
     parser.add_argument("--checkpoint-freq", type=int, default=0, help="save every N env steps; 0 disables checkpoints")
+    parser.add_argument("--reward-print-freq", type=int, default=1, help="print reward term means every N PPO rollouts; 0 disables")
     parser.add_argument("--verbose", type=int, choices=(0, 1, 2), default=1)
     parser.epilog = "Available tasks: " + ", ".join(sorted(tasks))
     return parser
@@ -97,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         import torch
         from stable_baselines3 import PPO
-        from stable_baselines3.common.callbacks import CheckpointCallback
+        from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
         from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
     except ImportError as exc:
         raise SystemExit(
@@ -126,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
         env_fns.append(wrapped_factory)
 
     if args.vec_env == "subproc" and args.n_envs > 1:
-        vec_env = SubprocVecEnv(env_fns, start_method="spawn")
+        vec_env = SubprocVecEnv(env_fns, start_method=args.subproc_start_method)
     else:
         vec_env = DummyVecEnv(env_fns)
     vec_env = VecMonitor(vec_env)
@@ -160,9 +227,17 @@ def main(argv: list[str] | None = None) -> int:
                 name_prefix="residual_ppo",
             )
         )
+    if args.reward_print_freq > 0:
+        callbacks.append(RewardTermsPrinter.build(BaseCallback)(args.reward_print_freq))
 
     print(f"tasks: {task_keys}")
     print(f"n_envs: {args.n_envs}, vec_env: {args.vec_env}")
+    if args.vec_env == "subproc" and args.n_envs > 1:
+        print(f"subproc_start_method: {args.subproc_start_method}")
+    print(
+        f"episode_sim_seconds: {args.episode_seconds}, step_seconds: {args.step_seconds}, "
+        f"env_steps_per_episode: {max(1, int(round(args.episode_seconds / args.step_seconds)))}"
+    )
     print(f"run_dir: {run_dir}")
     try:
         model.learn(total_timesteps=args.total_timesteps, callback=callbacks or None, tb_log_name=run_name)

@@ -39,6 +39,8 @@ except ImportError:  # pragma: no cover - exercised only on minimal machines.
 from src.robot_smoke.control.length_schedule import load_length_schedule
 from src.robot_smoke.control.lqr import compute_lqr_state
 from src.robot_smoke.control.rl_interface import RL_CONTROLLER_MODES, ResidualRlAction
+from src.robot_smoke.control.roll import base_roll_angle
+from src.robot_smoke.control.trajectory import trapezoid_speed_reference
 from src.robot_smoke.core.config import DEFAULT_CONFIG_PATH, RunConfig, load_yaml_defaults, runtime_control_config
 from src.robot_smoke.core.constants import (
     DEFAULT_LQR_K,
@@ -64,18 +66,20 @@ from src.robot_smoke.core.constants import (
 )
 from src.robot_smoke.io.cli import build_parser
 from src.robot_smoke.model.kinematics import compute_virtual_leg_state
+from src.robot_smoke.model.mechanics import _contact_normal_force_for_wheel
 from src.robot_smoke.model.mechanics import support_force_scale_for_length
 from src.robot_smoke.model_smoke import _build_virtual_rod_targets
 from src.robot_smoke.runner import _flight_test_model_xml, _scheduled_initial_pose
 from src.robot_smoke.experiments.virtual_rod import _run_virtual_rod_test
 from src.robot_smoke.experiments.viewer import MujocoViewerObserver
 from src.robot_smoke.core.mujoco_utils import load_mujoco
+from .reward import RewardContext, compute_residual_reward, is_fallen
 
 
 TASKS_PATH = PROJECT_ROOT / "server_training" / "residual_rl_tasks.yaml"
 OBSERVATION_SIZE = 20
 DEFAULT_EPISODE_SECONDS = 10.0
-DEFAULT_ACTION_LIMITS = (2.0, 0.5, 25.0, 0.035, 0.035)
+DEFAULT_ACTION_LIMITS = (2.0, 0.5, 25.0, 0.08, 0.08)
 TASK_ONE_HOT = {
     "forward_jump": (1.0, 0.0, 0.0),
     "flight_ramp": (0.0, 1.0, 0.0),
@@ -325,6 +329,10 @@ class ResidualCommandEnv(gym.Env if gym is not None else object):
         self._time_s = 0.0
         self._last_obs = np.zeros(OBSERVATION_SIZE, dtype=np.float32)
         self._rollout_context: dict[str, object] = {}
+        self._previous_action = np.zeros(5, dtype=np.float32)
+        self._previous_airborne = False
+        self._was_airborne_episode = False
+        self._last_reward_terms: dict[str, float] = {}
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         if gym is not None:
@@ -332,6 +340,10 @@ class ResidualCommandEnv(gym.Env if gym is not None else object):
         del options
         self._time_s = 0.0
         self._rollout_context = {}
+        self._previous_action = np.zeros(5, dtype=np.float32)
+        self._previous_airborne = False
+        self._was_airborne_episode = False
+        self._last_reward_terms = {}
         self._data = _scheduled_initial_pose(
             self.mujoco,
             self.model,
@@ -353,8 +365,7 @@ class ResidualCommandEnv(gym.Env if gym is not None else object):
         self._time_s += result.steps * float(self.model.opt.timestep)
         airborne = result.airborne_steps > 0
         self._last_obs = self._observation_from_data(self._data, result.final_lqr_state, airborne=airborne)
-        reward = self._reward(result, action_array)
-        terminated = False
+        reward, terminated = self._reward(result, action_array, airborne=airborne)
         truncated = self._time_s >= self.episode_seconds
         info = {
             "task_key": self.task.key,
@@ -363,7 +374,12 @@ class ResidualCommandEnv(gym.Env if gym is not None else object):
             "max_base_height": result.max_base_height,
             "max_abs_ctrl": result.max_abs_ctrl,
             "saturated_steps": result.saturated_steps,
+            "reward_terms": self._last_reward_terms,
+            "landing_phase": str(self._rollout_context.get("landing_phase", "ground")),
         }
+        self._previous_action = action_array.copy()
+        self._previous_airborne = airborne
+        self._was_airborne_episode = self._was_airborne_episode or airborne or bool(self._rollout_context.get("was_airborne", False))
         return self._last_obs.copy(), reward, terminated, truncated, info
 
     def visualize_constant_action(self, action, *, seconds: float, realtime: bool = True, sync_hz: float = 30.0):
@@ -464,6 +480,7 @@ class ResidualCommandEnv(gym.Env if gym is not None else object):
             copy_final_data=False,
             control_decimation_steps=self.control_decimation_steps,
             fast_result=True,
+            rl_training_takeoff_control=True,
             on_initialized=on_initialized,
         )
 
@@ -490,11 +507,44 @@ class ResidualCommandEnv(gym.Env if gym is not None else object):
         ]
         return np.asarray(obs, dtype=np.float32)
 
-    def _reward(self, result, action: np.ndarray) -> float:
+    def _reward(self, result, action: np.ndarray, *, airborne: bool) -> tuple[float, bool]:
         state = result.final_lqr_state
-        pitch_cost = abs(state.pitch) if state is not None else 0.0
-        theta_cost = abs(state.theta) if state is not None else 0.0
-        saturation_cost = 0.05 * result.saturated_steps
-        control_cost = 0.002 * float(np.dot(action, action))
-        height_bonus = 0.2 * max(0.0, float(result.max_base_height) - float(result.final_base_height))
-        return float(height_bonus - pitch_cost - 0.2 * theta_cost - saturation_cost - control_cost)
+        if state is None or self._data is None:
+            self._last_reward_terms = {}
+            return 0.0, False
+        left_leg = compute_virtual_leg_state(self.mujoco, self.model, self._data, "left")
+        right_leg = compute_virtual_leg_state(self.mujoco, self.model, self._data, "right")
+        left_contact_force = _contact_normal_force_for_wheel(self.mujoco, self.model, self._data, "left")
+        right_contact_force = _contact_normal_force_for_wheel(self.mujoco, self.model, self._data, "right")
+        task_time_s = max(0.0, self._time_s - float(self.config.startup_ramp_seconds))
+        _, current_speed_reference = trapezoid_speed_reference(self.config.speed_profile, task_time_s)
+        context = RewardContext(
+            task_name=self.task.task_name,
+            commanded_speed=self.task.commanded_speed,
+            time_s=self._time_s,
+            episode_seconds=self.episode_seconds,
+            airborne=airborne,
+            was_airborne=self._was_airborne_episode or bool(self._rollout_context.get("was_airborne", False)),
+            just_liftoff=(not self._previous_airborne) and airborne,
+            just_recontact=self._previous_airborne and not airborne,
+            landing_phase=str(self._rollout_context.get("landing_phase", "ground")),
+            pitch=float(state.pitch),
+            pitch_rate=float(state.pitch_rate),
+            theta=float(state.theta),
+            theta_rate=float(state.theta_rate),
+            x_rate=float(state.x_rate),
+            current_speed_reference=float(current_speed_reference),
+            base_z=float(self._data.qpos[2]) if self.model.nq >= 3 else 0.0,
+            base_z_vel=float(self._data.qvel[2]) if self.model.nv >= 3 else 0.0,
+            roll=float(base_roll_angle(self._data.qpos)),
+            left_leg_length=float(left_leg.length),
+            right_leg_length=float(right_leg.length),
+            left_contact_force=float(left_contact_force),
+            right_contact_force=float(right_contact_force),
+            saturated_steps=int(result.saturated_steps),
+            action=action.astype(float),
+            previous_action=self._previous_action.astype(float),
+        )
+        reward, terms = compute_residual_reward(context)
+        self._last_reward_terms = terms
+        return reward, is_fallen(context)

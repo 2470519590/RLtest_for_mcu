@@ -345,6 +345,7 @@ def _run_virtual_rod_test(
     copy_final_data: bool = True,
     control_decimation_steps: int = 1,
     fast_result: bool = False,
+    rl_training_takeoff_control: bool = False,
     on_initialized: Callable[[object], Callable[..., bool] | None] | None = None,
 ) -> VirtualRodResult:
     if runtime_controls is None:
@@ -758,15 +759,13 @@ def _run_virtual_rod_test(
         right_leg = _compute_virtual_leg_state(mujoco, model, data, "right")
         if jump_test and not jump_started:
             if forward_jump_test:
-                theta_limit = math.radians(3.0)
-                theta_ready = abs(left_leg.theta) < theta_limit and abs(right_leg.theta) < theta_limit
-                if _is_speed_profile_cruise(speed_profile, task_time_s) and theta_ready:
+                if _is_speed_profile_cruise(speed_profile, task_time_s):
                     jump_started = True
                     active_jump_time_s = task_time_s
                     jump_extension_start_time = None
-            elif task_time_s >= jump_time_s:
+            elif (rl_training_takeoff_control and task_time_s >= 0.2) or task_time_s >= jump_time_s:
                 jump_started = True
-                active_jump_time_s = float(jump_time_s)
+                active_jump_time_s = task_time_s if rl_training_takeoff_control else float(jump_time_s)
                 jump_extension_start_time = None
         average_leg_length = 0.5 * (left_leg.length + right_leg.length)
         jump_crouch_ready = average_leg_length <= jump_crouch_leg_length + 0.003
@@ -776,12 +775,12 @@ def _run_virtual_rod_test(
             and jump_extension_start_time is None
             and not was_airborne
             and landing_phase == "ground"
-            and jump_crouch_ready
+            and (rl_training_takeoff_control or jump_crouch_ready)
         ):
             jump_extension_start_time = task_time_s
         jump_extension_active = (
             jump_extension_start_time is not None
-            and jump_extension_start_time <= task_time_s < jump_extension_start_time + 0.50
+            and jump_extension_start_time <= task_time_s < jump_extension_start_time + (0.80 if rl_training_takeoff_control else 0.50)
             and not was_airborne
             and landing_phase == "ground"
         )
@@ -789,23 +788,24 @@ def _run_virtual_rod_test(
         scheduled_right_target = _startup_length_target(right_target, time_s, startup_ramp_seconds)
         scheduled_left_target = _leg_height_test_target(scheduled_left_target, task_time_s, leg_height_test, leg_height_levels)
         scheduled_right_target = _leg_height_test_target(scheduled_right_target, task_time_s, leg_height_test, leg_height_levels)
-        scheduled_left_target = _jump_length_target(
-            scheduled_left_target,
-            task_time_s,
-            jump_started,
-            active_jump_time_s,
-            jump_crouch_leg_length,
-            maximum_leg_length,
-        )
-        scheduled_right_target = _jump_length_target(
-            scheduled_right_target,
-            task_time_s,
-            jump_started,
-            active_jump_time_s,
-            jump_crouch_leg_length,
-            maximum_leg_length,
-        )
-        if jump_extension_active:
+        if not rl_training_takeoff_control:
+            scheduled_left_target = _jump_length_target(
+                scheduled_left_target,
+                task_time_s,
+                jump_started,
+                active_jump_time_s,
+                jump_crouch_leg_length,
+                maximum_leg_length,
+            )
+            scheduled_right_target = _jump_length_target(
+                scheduled_right_target,
+                task_time_s,
+                jump_started,
+                active_jump_time_s,
+                jump_crouch_leg_length,
+                maximum_leg_length,
+            )
+        if jump_extension_active and not rl_training_takeoff_control:
             scheduled_left_target = (maximum_leg_length, scheduled_left_target[1])
             scheduled_right_target = (maximum_leg_length, scheduled_right_target[1])
         scheduled_left_target = _leg_length_sine_target(

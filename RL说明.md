@@ -49,6 +49,7 @@
 ├─ run_smoke.py                    # 本地仿真主入口
 ├─ run_residual_env_smoke.py       # Env smoke / 可视化 / 零残差对照入口
 ├─ run_train_residual_ppo.py       # PPO 训练入口
+├─ run_residual_policy_eval.py     # 加载 PPO .zip 后评估 / 可视化入口
 └─ RL说明.md                       # 本文件
 ```
 
@@ -202,6 +203,43 @@ delta_L_ref_right
 
 服务器训练方向：Gymnasium-style env + Stable-Baselines3 PPO；训练产物、日志、checkpoint 不进仓库。完成训练后导出 ONNX，再单独做本地 MuJoCo 可视化验证。
 
+## Reward 设计
+
+当前 reward 实现在 `server_training/reward.py`。第一版保持轻量，不追求手写每个动作细节，而是用 LQR-like 二次型思想加少量 phase-aware 项：
+
+```text
+r =
+  - posture_cost(pitch, dpitch, theta, dtheta)
+  - speed_cost(dx - dx_ref)
+  - normalized_action_cost
+  - normalized_action_delta_cost
+  - medium_saturation_cost
+  - touchdown_impact_cost
+  - airborne_leg_range_cost
+  + liftoff_bonus_for_jump_tasks
+  + early_recovery_bonus
+  - obvious_fall_penalty
+```
+
+设计原则：
+
+- 落地优先级：`pitch` 快速恢复最重要，其次轮速恢复，`theta` 只作为辅助稳定项。
+- 带速度任务落地后允许先降速吸收冲击，再逐渐恢复原速度。
+- 飞坡不奖励主动提前离地。
+- 原地跳不奖励高度，只奖励及时离地、空中姿态、合理腿长范围、落地冲击小和快速恢复。
+- 空中腿长使用范围奖励：上升阶段偏收腿，下降/落地前偏伸腿；接触后不强制立刻回 nominal，让冲击惩罚引导缓冲。
+- 冲击通过左右轮法向力和下落速度惩罚，不显式规定“必须缩腿多少”。
+- 能耗先惩罚 normalized residual action 和 action 变化率，不直接惩罚总电机功率。
+- 明显摔倒会 early terminate：主要看 pitch、roll 和 base height。
+
+训练 info 会输出 `reward_terms`，PPO 入口默认每个 rollout 打印均值，例如：
+
+```text
+reward_terms_mean[1]: total=... posture=... speed=... impact=... leg=... action=... smooth=... liftoff=... recovery=... fall=...
+```
+
+这些分项用于服务器无 viewer 时判断策略是否在“骗奖励”，不是物理合格判据。
+
 当前最小 Env / smoke 入口：
 
 ```powershell
@@ -222,6 +260,32 @@ delta_L_ref_right
 
 训练任务来自 `server_training/residual_rl_tasks.yaml`，当前为 `forward_jump_medium/high`、`flight_ramp_medium/high`、`inplace_jump`。训练 episode 默认 `10 s` 是 MuJoCo 仿真时间，不是墙钟时间；训练脚本不打开 viewer、不按 realtime sleep，会尽可能快地把完整任务仿真完。不要把 episode 裁剪到 2 s 来判断行为改善。`--step-seconds 0.02` 表示 50 Hz policy/controller 更新；MuJoCo 仍推进完整 10000 个 1 ms 物理步。产物默认写入 `runs/residual_ppo/<run-name>/`，不进仓库。
 
+Linux 服务器并行训练建议显式指定进程启动方式：
+
+```bash
+python run_train_residual_ppo.py \
+  --tasks all \
+  --vec-env subproc \
+  --subproc-start-method forkserver \
+  --n-envs 5 \
+  --total-timesteps 1000000 \
+  --n-steps 500 \
+  --batch-size 1000 \
+  --episode-sim-seconds 10 \
+  --step-seconds 0.02 \
+  --checkpoint-freq 50000 \
+  --run-name residual_ppo_all_1m_50hz
+```
+
+训练日志会打印总体和分任务 reward 分项：
+
+```text
+reward_terms_mean[...]: total=... posture=... speed=... impact=... leg=... action=... smooth=... liftoff=... recovery=... fall=...
+reward_terms_by_task[...][flight_ramp_medium]: ...
+```
+
+如果 `ep_len_mean` 长期远小于 `500`，说明 episode 经常 early terminate，通常是策略早期摔倒；此时应重点看 `fall` 分项和具体 task 分桶。
+
 本地单回合速度检查：
 
 ```powershell
@@ -237,6 +301,21 @@ Measure-Command { & 'E:\miniconda\envs\py310\python.exe' run_residual_env_smoke.
 ```
 
 如只检查 Python/SB3 是否能启动和保存模型，可以用更小 timesteps；但用于判断行为改善的 rollout 必须覆盖完整任务时长。
+
+训练完成后，用评估入口加载 `.zip` 模型：
+
+```powershell
+& 'E:\miniconda\envs\py310\python.exe' run_residual_policy_eval.py --model runs\residual_ppo\flight_ramp_medium_20k\models\final_model.zip --task-key flight_ramp_medium --episode-sim-seconds 10 --step-seconds 0.02 --print-every 25 --device cpu
+```
+
+打开 viewer 看动作：
+
+```powershell
+Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
+& 'E:\miniconda\envs\py310\python.exe' run_residual_policy_eval.py --model runs\residual_ppo\flight_ramp_medium_20k\models\final_model.zip --task-key flight_ramp_medium --episode-sim-seconds 10 --step-seconds 0.02 --visualize --viewer-sync-hz 30 --device cpu
+```
+
+评估时仍以 viewer 人工观察为准：看空中收/伸腿是否合理、触地冲击是否变小、pitch 是否更快恢复、轮子是否异常打滑、是否提前摔倒。
 
 ## 绘图入口
 

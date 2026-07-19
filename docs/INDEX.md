@@ -30,8 +30,10 @@
 - `server_training/residual_rl_tasks.yaml`：服务器训练任务 key、速度档和入口参数清单。
 - `server_training/residual_env.py`：最小 residual RL Env，支持任务条件、零残差对照和训练用 headless rollout。
 - `server_training/train_residual_ppo.py`：Stable-Baselines3 PPO 训练实现。
+- `server_training/evaluate_policy.py`：加载已训练 PPO 策略后的 headless / viewer 评估实现。
 - `run_residual_env_smoke.py`：根目录可直接运行的最小 Env smoke 入口。
 - `run_train_residual_ppo.py`：根目录可直接运行的 residual PPO 训练入口，输出默认写入 `runs/`。
+- `run_residual_policy_eval.py`：根目录可直接运行的 residual PPO 策略评估入口。
 
 ## 默认不要读取或提交
 
@@ -47,6 +49,7 @@
 - `run_smoke.py`
 - `run_residual_env_smoke.py`
 - `run_train_residual_ppo.py`
+- `run_residual_policy_eval.py`
 
 当前已有最小 PPO 训练入口，但仍属于轻量原型，不是完整训练平台。训练任务以 `server_training/residual_rl_tasks.yaml` 为准，当前为 5 个 key：`forward_jump_medium/high`、`flight_ramp_medium/high`、`inplace_jump`。
 

@@ -16,6 +16,7 @@
 - `RL说明.md`：Residual RL Env、任务清单、PPO 训练和本地验证命令。
 - `run_residual_env_smoke.py`：Residual RL Env smoke / 可视化 / 零残差对照入口。
 - `run_train_residual_ppo.py`：最小 Stable-Baselines3 PPO 训练入口，输出默认写入忽略目录 `runs/`。
+- `run_residual_policy_eval.py`：加载 PPO `.zip` 策略后的 headless / viewer 评估入口。
 
 ## 环境
 
@@ -209,6 +210,36 @@ Measure-Command { & 'E:\miniconda\envs\py310\python.exe' run_residual_env_smoke.
 ```
 
 `--episode-sim-seconds 10` 是 MuJoCo 仿真时间，不能为了训练速度裁剪成 2 秒；训练加速应来自 headless、并行 Env 和降低策略/控制更新频率。`--step-seconds 0.02` 表示 50 Hz policy/controller 更新，MuJoCo 仍推进完整 10000 个 1 ms 物理步。
+
+服务器并行训练建议：
+
+```bash
+python run_train_residual_ppo.py \
+  --tasks all \
+  --vec-env subproc \
+  --subproc-start-method forkserver \
+  --n-envs 5 \
+  --total-timesteps 1000000 \
+  --n-steps 500 \
+  --batch-size 1000 \
+  --episode-sim-seconds 10 \
+  --step-seconds 0.02 \
+  --checkpoint-freq 50000 \
+  --run-name residual_ppo_all_1m_50hz
+```
+
+训练后加载模型评估：
+
+```powershell
+& 'E:\miniconda\envs\py310\python.exe' run_residual_policy_eval.py --model runs\residual_ppo\residual_ppo_all_1m_50hz\models\final_model.zip --task-key flight_ramp_medium --episode-sim-seconds 10 --step-seconds 0.02 --print-every 25 --device cpu
+```
+
+本地打开 viewer 看动作：
+
+```powershell
+Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
+& 'E:\miniconda\envs\py310\python.exe' run_residual_policy_eval.py --model runs\residual_ppo\residual_ppo_all_1m_50hz\models\final_model.zip --task-key flight_ramp_medium --episode-sim-seconds 10 --step-seconds 0.02 --visualize --viewer-sync-hz 30 --device cpu
+```
 
 ## 脚本规则
 
