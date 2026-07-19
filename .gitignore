@@ -11,6 +11,7 @@ output/
 tmp/
 logs/
 *.log
+*.pyc
 
 # 临时数据与调试导出
 *.csv
