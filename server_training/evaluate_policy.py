@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--task-key", choices=sorted(tasks), default="flight_ramp_medium")
     parser.add_argument("--episode-sim-seconds", "--episode-seconds", dest="episode_seconds", type=float, default=DEFAULT_EPISODE_SECONDS)
     parser.add_argument("--step-seconds", type=float, default=0.02)
-    parser.add_argument("--control-decimation-steps", type=int, default=None)
+    parser.add_argument("--control-decimation-steps", type=int, default=None, help="default 1 keeps low-level LQR/PID/VMC at MuJoCo physics rate")
     parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--visualize", action="store_true", help="open MuJoCo viewer")
     parser.add_argument("--no-realtime", action="store_true", help="run viewer as fast as possible")

@@ -301,11 +301,7 @@ class ResidualCommandEnv(gym.Env if gym is not None else object):
         else:
             self.model = self.mujoco.MjModel.from_xml_path(str(self.config.model_path))
         self.step_mujoco_steps = max(1, int(round(self.step_seconds / float(self.model.opt.timestep))))
-        self.control_decimation_steps = (
-            self.step_mujoco_steps
-            if control_decimation_steps is None
-            else max(1, int(control_decimation_steps))
-        )
+        self.control_decimation_steps = 1 if control_decimation_steps is None else max(1, int(control_decimation_steps))
         self.left_target, self.right_target = _build_virtual_rod_targets(
             self.mujoco,
             self.model,

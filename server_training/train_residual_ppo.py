@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--control-decimation-steps",
         type=int,
         default=None,
-        help="MuJoCo substeps between Python controller updates; default matches --step-seconds",
+        help="MuJoCo substeps between low-level LQR/PID/VMC updates; default 1 keeps low-level control at physics rate",
     )
     parser.add_argument("--n-steps", type=int, default=64)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -236,7 +236,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"subproc_start_method: {args.subproc_start_method}")
     print(
         f"episode_sim_seconds: {args.episode_seconds}, step_seconds: {args.step_seconds}, "
-        f"env_steps_per_episode: {max(1, int(round(args.episode_seconds / args.step_seconds)))}"
+        f"env_steps_per_episode: {max(1, int(round(args.episode_seconds / args.step_seconds)))}, "
+        f"control_decimation_steps: {1 if args.control_decimation_steps is None else args.control_decimation_steps}"
     )
     print(f"run_dir: {run_dir}")
     try:

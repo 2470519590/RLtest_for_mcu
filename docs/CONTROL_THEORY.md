@@ -49,6 +49,8 @@ delta_L_ref,left, delta_L_ref,right
 
 `delta_L_ref,left/right` 只改变送入现有腿长/IK/VMC 链路的参考值，并且总是经过 `minimum_leg_length..maximum_leg_length` 限幅。离地时，论文第 3 节门控仍作为名义 LQR 基线：纯 `lqr` 模式保持 `T=0`、只保留 `Tp(theta,dtheta)`；`lqr_residual` 模式允许策略在该基线之上通过受限 residual 学习起跳、空中姿态、收腿/伸腿和落地平衡。
 
+频率语义：MuJoCo 物理步、LQR、PID、VMC、限幅和安全逻辑保持 `1 kHz` 更新；Residual RL 策略可以以 `50 Hz` 或 `100 Hz` 低频推理，策略输出在两次推理之间保持。`--step-seconds 0.02` 只表示 residual policy 每 `20 ms` 给一次新动作，不表示底层控制器降到 `50 Hz`。评估或训练 residual policy 时，`control_decimation_steps=1` 表示底层 LQR/PID/VMC 每个 `1 ms` MuJoCo 步都更新。
+
 ## 虚拟腿与 VMC
 
 ```text
@@ -122,3 +124,15 @@ airborne = (F_N,left < 20 N) and (F_N,right < 20 N)
 为避免 reset 后接触尚未解析时的 `F_N=0` 误判，检测器必须先看到任一轮 `F_N >= 20 N` 后才允许进入离地状态。纯 LQR 离地基线执行论文第 3 节的增益门控：反馈增益矩阵除 `K21,K22` 外全部置零，等价于轮端公共力矩 `T=0`，只保留 `Tp` 对 `theta,dtheta` 的反馈，即仅保留 `K[1,0]` 和 `K[1,1]`，用于在空中保持虚拟腿姿态接近竖直。`lqr_residual` 模式下，该门控是 residual RL 的名义基线，策略仍可通过受限残差优化离地、空中和落地动作。
 
 离地检测不得额外接管腿长参考、速度参考或落地刹车；重新接触后直接恢复完整 LQR。腿长缓冲应由正常腿长弹簧阻尼和机械行程承担，不在离地检测状态机里冻结或改写 `L_ref/dx_ref/x_ref`。
+## STM32F407 deployment control-rate semantics
+
+MCU deployment keeps the corrected residual-RL frequency semantics:
+
+```text
+1 kHz: five-bar kinematics, length-scheduled LQR, PID/PD, VMC, limiters, actuator conversion
+50 Hz or 100 Hz: residual NN inference
+```
+
+Residual NN output is held between inference ticks. The NN only outputs bounded residuals; it does not decide tasks, switch modes, or reduce the update frequency of LQR/PID/VMC. The F407-side residual actor outputs normalized 5-D actions, and deployment multiplies them by residual limits before adding them to the nominal control chain.
+
+For simulation-to-MCU validation, the serial bridge sends body attitude, wheel odometry, task conditioning, and four drive-joint angles/rates. The MCU computes virtual-leg length, virtual-leg angle, rates, and Jacobian locally before running LQR, VMC, PID/PD, and residual inference. The MCU then returns MuJoCo actuator control values over serial; there is no real-motor control path in this project stage.

@@ -50,6 +50,7 @@
 ├─ run_residual_env_smoke.py       # Env smoke / 可视化 / 零残差对照入口
 ├─ run_train_residual_ppo.py       # PPO 训练入口
 ├─ run_residual_policy_eval.py     # 加载 PPO .zip 后评估 / 可视化入口
+├─ run_export_residual_policy_onnx.py # 导出 residual actor ONNX 入口
 └─ RL说明.md                       # 本文件
 ```
 
@@ -250,7 +251,7 @@ reward_terms_mean[1]: total=... posture=... speed=... impact=... leg=... action=
 & 'E:\miniconda\envs\py310\python.exe' run_residual_env_smoke.py --task-key flight_ramp_medium --compare-zero-residual --episode-seconds 10 --visualize-seconds 10 --step-seconds 0.02
 ```
 
-`--task-key` 使用 `server_training/residual_rl_tasks.yaml` 内的 5 个训练 key。`--action` 是归一化 residual 测试动作，顺序为 `[delta_T, delta_Tp, delta_F_l_common, delta_L_ref_left, delta_L_ref_right]`，每个值在 `[-1,1]` 内，再由 Env 内部固定限幅缩放到真实单位。`--controller-mode lqr` 用来对照原始 LQR/VMC 基线；`--controller-mode lqr_residual` 才会把 `--action` 叠加到名义控制上。`--control-decimation-steps` 可显式指定 MuJoCo 子步和控制更新的比例；默认跟随 `--step-seconds`，即每个 policy step 更新一次 Python 控制器。
+`--task-key` 使用 `server_training/residual_rl_tasks.yaml` 内的 5 个训练 key。`--action` 是归一化 residual 测试动作，顺序为 `[delta_T, delta_Tp, delta_F_l_common, delta_L_ref_left, delta_L_ref_right]`，每个值在 `[-1,1]` 内，再由 Env 内部固定限幅缩放到真实单位。`--controller-mode lqr` 用来对照原始 LQR/VMC 基线；`--controller-mode lqr_residual` 才会把 `--action` 叠加到名义控制上。`--step-seconds` 只表示 residual policy 的更新周期；底层 LQR/PID/VMC 默认保持每个 MuJoCo 物理步更新。若显式传参，使用 `--control-decimation-steps 1` 表示底层控制仍为 1 kHz。
 
 当前并行 PPO 训练入口：
 
@@ -258,7 +259,7 @@ reward_terms_mean[1]: total=... posture=... speed=... impact=... leg=... action=
 & 'E:\miniconda\envs\py310\python.exe' run_train_residual_ppo.py --tasks all --vec-env subproc --n-envs 5 --total-timesteps 200000 --n-steps 500 --batch-size 500 --episode-sim-seconds 10 --step-seconds 0.02 --run-name residual_ppo_mh_jump_ramp_50hz
 ```
 
-训练任务来自 `server_training/residual_rl_tasks.yaml`，当前为 `forward_jump_medium/high`、`flight_ramp_medium/high`、`inplace_jump`。训练 episode 默认 `10 s` 是 MuJoCo 仿真时间，不是墙钟时间；训练脚本不打开 viewer、不按 realtime sleep，会尽可能快地把完整任务仿真完。不要把 episode 裁剪到 2 s 来判断行为改善。`--step-seconds 0.02` 表示 50 Hz policy/controller 更新；MuJoCo 仍推进完整 10000 个 1 ms 物理步。产物默认写入 `runs/residual_ppo/<run-name>/`，不进仓库。
+训练任务来自 `server_training/residual_rl_tasks.yaml`，当前为 `forward_jump_medium/high`、`flight_ramp_medium/high`、`inplace_jump`。训练 episode 默认 `10 s` 是 MuJoCo 仿真时间，不是墙钟时间；训练脚本不打开 viewer、不按 realtime sleep，会尽可能快地把完整任务仿真完。不要把 episode 裁剪到 2 s 来判断行为改善。`--step-seconds 0.02` 表示 50 Hz residual policy 更新；MuJoCo、LQR、PID、VMC 仍推进完整 10000 个 1 ms 底层控制步。产物默认写入 `runs/residual_ppo/<run-name>/`，不进仓库。
 
 Linux 服务器并行训练建议显式指定进程启动方式：
 
@@ -273,6 +274,7 @@ python run_train_residual_ppo.py \
   --batch-size 1000 \
   --episode-sim-seconds 10 \
   --step-seconds 0.02 \
+  --control-decimation-steps 1 \
   --checkpoint-freq 50000 \
   --run-name residual_ppo_all_1m_50hz
 ```
@@ -305,15 +307,38 @@ Measure-Command { & 'E:\miniconda\envs\py310\python.exe' run_residual_env_smoke.
 训练完成后，用评估入口加载 `.zip` 模型：
 
 ```powershell
-& 'E:\miniconda\envs\py310\python.exe' run_residual_policy_eval.py --model runs\residual_ppo\flight_ramp_medium_20k\models\final_model.zip --task-key flight_ramp_medium --episode-sim-seconds 10 --step-seconds 0.02 --print-every 25 --device cpu
+& 'E:\miniconda\envs\py310\python.exe' run_residual_policy_eval.py --model runs\residual_ppo\flight_ramp_medium_20k\models\final_model.zip --task-key flight_ramp_medium --episode-sim-seconds 10 --step-seconds 0.02 --control-decimation-steps 1 --print-every 25 --device cpu
 ```
 
 打开 viewer 看动作：
 
 ```powershell
 Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
-& 'E:\miniconda\envs\py310\python.exe' run_residual_policy_eval.py --model runs\residual_ppo\flight_ramp_medium_20k\models\final_model.zip --task-key flight_ramp_medium --episode-sim-seconds 10 --step-seconds 0.02 --visualize --viewer-sync-hz 30 --device cpu
+& 'E:\miniconda\envs\py310\python.exe' run_residual_policy_eval.py --model runs\residual_ppo\flight_ramp_medium_20k\models\final_model.zip --task-key flight_ramp_medium --episode-sim-seconds 10 --step-seconds 0.02 --control-decimation-steps 1 --visualize --viewer-sync-hz 30 --device cpu
 ```
+
+当前已训练飞坡模型的本地可视化参考命令：
+
+```powershell
+Remove-Item Env:MUJOCO_GL -ErrorAction SilentlyContinue
+& 'E:\miniconda\envs\py310\python.exe' run_residual_policy_eval.py `
+  --model runs\residual_ppo\final_model.zip `
+  --task-key flight_ramp_high `
+  --episode-sim-seconds 10 `
+  --step-seconds 0.02 `
+  --control-decimation-steps 1 `
+  --visualize `
+  --viewer-sync-hz 60 `
+  --device cpu
+```
+
+ONNX 导出入口：
+
+```powershell
+& 'E:\miniconda\envs\py310\python.exe' run_export_residual_policy_onnx.py --model runs\residual_ppo\final_model.zip --output runs\residual_ppo\final_model.onnx --check --device cpu
+```
+
+导出的 ONNX 输出是归一化 residual action，部署时仍需按动作限幅缩放到真实单位。
 
 评估时仍以 viewer 人工观察为准：看空中收/伸腿是否合理、触地冲击是否变小、pitch 是否更快恢复、轮子是否异常打滑、是否提前摔倒。
 
